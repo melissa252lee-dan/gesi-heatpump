@@ -307,13 +307,12 @@ if st.session_state.analyzed:
                        MONTH_TOU[m] if "TOU" in tariff else MONTH_SEASON[m], hp_kw)
         for m in months
     )
-    # 연간 HP 추가 전기요금 (EV 할인)
+# 연간 HP 추가 전기요금 (EV 할인 수식 완전히 제거됨!)
     ann_hp_add = sum(
         (calc_elec_bill(base_kwh[m-1]+hp_add_m[m-1], tariff,
                         MONTH_TOU[m] if "TOU" in tariff else MONTH_SEASON[m], hp_kw)
          - calc_elec_bill(base_kwh[m-1], tariff,
                           MONTH_TOU[m] if "TOU" in tariff else MONTH_SEASON[m], hp_kw))
-        * ev_disc
         for m in months
     )
     # 연간 PV 절감
@@ -408,15 +407,17 @@ if st.session_state.analyzed:
             ).properties(height=350),
             use_container_width=True)
 
-    # ── 월별 비교표 ──────────────────────────────────────
+# ── 월별 비교표 ──────────────────────────────────────
     st.markdown("**월별 전기요금 상세 비교 (히트펌프 전환 전·후)**")
     mn = ["1월","2월","3월","4월","5월","6월","7월","8월","9월","10월","11월","12월"]
     bef, aft, hpa, pvs = [], [], [], []
     for m in months:
         s = MONTH_TOU[m] if "TOU" in tariff else MONTH_SEASON[m]
         b = calc_elec_bill(base_kwh[m-1], tariff, s, hp_kw)
-        a = (calc_elec_bill(base_kwh[m-1]+hp_add_m[m-1], tariff, s, hp_kw)
-             * ev_disc + b*(1-ev_disc))
+        
+        # ❌ EV 할인 관련 수식 제거 완료! 순수하게 합산된 전력량만으로 요금을 계산합니다.
+        a = calc_elec_bill(base_kwh[m-1]+hp_add_m[m-1], tariff, s, hp_kw)
+        
         pv = min(pv_kwh_m[m-1], hp_add_m[m-1]) * (214.6/10_000)
         bef.append(round(b,2)); aft.append(round(a,2))
         hpa.append(round(hp_add_m[m-1],0)); pvs.append(round(pv,2))
