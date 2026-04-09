@@ -183,10 +183,10 @@ with col_l:
 
 st.markdown("""
 <div class='info-box'>
-  <h4 class='info-title'>솔루션 개요</h4>
+  <h4 class='info-title'>💡 솔루션 개요</h4>
   <p class='info-text'>
-    고객의 주거 환경 및 에너지 사용량 데이터를 기반으로 공기열 히트펌프(AWHP) 도입 시 재무적 타당성을 분석합니다.<br>
-    <b>2026.04.16 시행 한국전력 요금표</b>를 내장하여 전기요금 고지서 금액만으로 kWh·HP 용량을 자동 역산합니다.
+    🏠 <b>우리 집 맞춤형 분석:</b> 거주 환경과 에너지 사용량을 바탕으로, 친환경 공기열 히트펌프(AWHP)로 바꾸면 <b>얼마나 경제적으로 이득인지</b> 꼼꼼하게 분석해 드립니다.<br><br>
+    ⚡ <b>고지서 하나로 OK!:</b> 최신 <b>한국전력 요금표(2026.04.16 시행)</b>가 내장되어 있습니다. 복잡하게 생각하실 필요 없이 평소 내시던 <b>전기요금과 난방비</b>만 입력하면, 알아서 척척 필요 용량과 전력량을 계산해 줍니다. 🌱💰
   </p>
 </div>
 """, unsafe_allow_html=True)
@@ -199,6 +199,27 @@ with c2: s_sub  = st.selectbox("기초 지자체", regions_full.get(s_reg, ["전
 c3,c4 = st.columns(2)
 with c3: h_type = st.selectbox("주거 형태", ["단독 주택 / 다가구 주택","아파트","연립 / 빌라 / 다세대 주택"])
 with c4: h_size = st.number_input("전용 면적 (평)", min_value=10, value=30)
+
+# ── [추가됨] 평수 기반 축열조 크기 직관적 안내 ─────────────────────────
+if h_size < 20:
+    tank_size = "약 350L"
+    tank_ref = "소형 냉장고 1대 크기 🧊"
+elif h_size < 35:
+    tank_size = "약 550L"
+    tank_ref = "워시타워 1대 설치 공간 🧺"
+else:
+    tank_size = "약 800L 이상"
+    tank_ref = "약 0.9평의 여유 공간 룸 🚪"
+
+st.markdown(f"""
+<div style='background-color: #f8fafc; border-left: 4px solid #3b82f6; padding: 16px; margin-top: 12px; border-radius: 4px;'>
+    <div style='color: #1e293b; font-weight: 700; margin-bottom: 4px; font-size: 1.05rem;'>📐 우리 집 맞춤 설치 공간 안내</div>
+    <div style='color: #475569; font-size: 0.95rem;'>
+        입력하신 평수(<b>{h_size}평</b>)를 기준으로 할 때, 대략 <b>{tank_size}</b> 용량의 축열조(버퍼탱크)가 필요할 것으로 예상됩니다.<br>
+        👉 체감상 <b>{tank_ref}</b>가 필요하다고 생각하시면 이해하기 쉽습니다!
+    </div>
+</div>
+""", unsafe_allow_html=True)
 
 # 2. 에너지 현황
 st.markdown('<div class="section-title">2. 에너지 소비 및 인프라 현황</div>', unsafe_allow_html=True)
@@ -218,23 +239,22 @@ with ct2: elec_tariff = st.selectbox("적용 전기 요금제",
 
 # 3. 정책 변수
 st.markdown('<div class="section-title">3. 정책 및 시뮬레이션 변수 설정</div>', unsafe_allow_html=True)
-if h_size<=32 or "아파트" in h_type:
-    st.caption("※ 분석 기준: 100~300L(소형) 축열조 적용 (필요 면적 약 0.5㎡)")
-else:
-    st.caption("※ 분석 기준: 300~500L(중대형) 축열조 적용 (필요 면적 약 1.5㎡)")
 
-with st.expander("상세 분석 파라미터 (2026.03 정책 기준)", expanded=True):
-    cs1,cs2 = st.columns(2)
-    with cs1:
-        f_inf    = st.slider("화석연료 물가 인상률 (연평균, %)", 0.0, 15.0, 5.0)
-        e_inf    = st.slider("전기요금 물가 인상률 (연평균, %)", 0.0, 15.0, 3.0)
-        apply_ev = st.checkbox("EV 특례 요금 수준 할인 적용", value=True)
-    with cs2:
-        sub_nat   = st.checkbox("정부 무상 보조금 적용 (최대 320만원)", value=True)
-        is_south  = s_reg in ["제주도","경상남도","전라남도","부산","울산","광주"]
-        sub_loc   = st.checkbox("지자체 매칭 보조금 적용 (최대 240만원)", value=is_south)
-        if not is_south: st.caption("참고: 지자체 보조금은 현재 남부권역을 중심으로 우선 배정됩니다.")
-        rep_cost  = st.number_input("기존 설비 10년 차 교체 충당금 (만원)", value=100)
+st.markdown("**상세 분석 파라미터 (2026.03 정책 기준)**")
+cs1, cs2 = st.columns(2)
+
+with cs1:
+    f_inf    = st.slider("화석연료 물가 인상률 (연평균, %)", 0.0, 15.0, 5.0)
+    e_inf    = st.slider("전기요금 물가 인상률 (연평균, %)", 0.0, 15.0, 3.0)
+    # EV 할인 체크박스 삭제됨
+
+with cs2:
+    sub_nat   = st.checkbox("정부 무상 보조금 적용 (최대 320만원)", value=True)
+    is_south  = s_reg in ["제주도","경상남도","전라남도","부산","울산","광주"]
+    sub_loc   = st.checkbox("지자체 매칭 보조금 적용 (최대 240만원)", value=is_south)
+    if not is_south: 
+        st.caption("참고: 지자체 보조금은 현재 남부권역을 중심으로 우선 배정됩니다.")
+    rep_cost  = st.number_input("기존 설비 10년 차 교체 충당금 (만원)", value=100)
 
 st.markdown("<br>", unsafe_allow_html=True)
 
