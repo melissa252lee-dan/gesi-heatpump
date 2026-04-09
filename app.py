@@ -96,7 +96,7 @@ FUEL_PRICE_PER_MJ = {
     "등유 보일러":        95.0,
     "LPG 보일러":        105.0,
 }
-HP_COP_WINTER = 3.0
+HP_COP_WINTER = 3.0 # 기본값 (파일 없을때 사용)
 HP_MONTHLY_LOAD = [1.0,0.9,0.4,0.15,0.05,0.05,0.05,0.05,0.05,0.15,0.4,0.85]
 
 MONTH_SEASON = {1:"other",2:"other",3:"other",4:"other",5:"other",6:"other",
@@ -174,7 +174,6 @@ def estimate_hp_kw(size, htype):
 def load_simulation_data():
     """두 개의 CSV 파일을 메모리에 한 번만 불러와서 속도를 높입니다."""
     try:
-        # [데이터 출처] 깃허브에 업로드된 CSV 파일
         df_temp = pd.read_csv("외기온도_시간분포.csv")
         df_cop = pd.read_csv("COP_계산기.csv")
         return df_temp, df_cop
@@ -182,19 +181,11 @@ def load_simulation_data():
         return None, None
 
 def calculate_regional_scop(region_name, df_temp, df_cop, water_temp="50"):
-    """
-    [연구원 테스트용 로직 설명]
-    1. '외기온도_시간분포.csv'에서 현재 선택된 지역(지점명)의 데이터만 걸러냅니다.
-    2. 해당 지역이 각각의 '외기온도'에서 몇 '시간'을 보냈는지 확인합니다.
-    3. 'COP_계산기.csv'에서 그 '외기온도'와 목표 '출수온도(예: 50도)'가 교차하는 COP 값을 찾습니다.
-    4. (COP값 × 머문 시간)을 모두 더한 뒤, 총 시간으로 나누어 해당 지역만의 '가중 평균 효율(SCOP)'을 도출합니다.
-    -> 이 값이 기존의 고정된 HP_COP_WINTER(3.0)를 대체하게 됩니다!
-    """
     if df_temp is None or df_cop is None:
         return HP_COP_WINTER  # 파일이 없을 경우 기존 3.0 고정값 사용
 
     try:
-        # 1. 지역 데이터 필터링 (글자가 포함되어 있으면 매칭)
+        # 1. 지역 데이터 필터링
         region_data = df_temp[df_temp['지점명'].astype(str).str.contains(region_name, na=False)]
         
         if region_data.empty:
@@ -234,11 +225,9 @@ col_t, col_l = st.columns([6,1])
 with col_t: 
     st.title("히트펌프 경제성 분석 솔루션")
 with col_l:
-    # 깃허브에 올린 로고 파일명으로 정확하게 변경해 주세요 (예: logo.png)
     logo_path = "logo.png"
-    
-    # 파일이 존재하는지 확인 후 로고 출력
     if os.path.exists(logo_path):
+        st.markdown("<div style='margin-top: 10px;'></div>", unsafe_allow_html=True)
         st.image(Image.open(logo_path), use_container_width=True)
 
 st.markdown("""
@@ -264,15 +253,6 @@ with c2: s_sub  = st.selectbox("기초 지자체", regions_full.get(s_reg, ["전
 # (2) 선택된 광역 지자체(s_reg)를 바탕으로 맞춤형 SCOP 실시간 계산
 dynamic_cop = calculate_regional_scop(s_reg, df_temp, df_cop)
 
-# (3) 연구원 테스트용 작동 원리 안내 패널 출력
-if df_temp is not None and df_cop is not None:
-    st.info(f"""
-    💡 **스마트 기후 시뮬레이션 작동 중 (내부 테스트/검증용 안내)**
-    * **데이터 매핑:** `외기온도_시간분포.csv`의 **[{s_reg}]** 기상 데이터와 `COP_계산기.csv`의 성능 곡선(출수 50도 기준)을 실시간 결합 중입니다.
-    * **적용 결과:** 기존 고정 효율(COP 3.0) 대신, 두 데이터를 곱해 산출한 **[{s_reg} 맞춤형 평균 효율(SCOP) : {dynamic_cop}]** 이 적용되었습니다!
-    * **어떻게 변하나요?** 타 지역을 선택해 보세요. 이 평균 효율({dynamic_cop}) 값이 계산기 내부의 `heat_to_hp_kwh()` 함수에 직접 주입되어, **'1월 HP 추가 전력(kWh)'**을 증감시키고 결과적으로 **투자 회수 시점**을 변화시킵니다.
-    """)
-
 c3,c4 = st.columns(2)
 with c3: h_type = st.selectbox("주거 형태", ["단독 주택 / 다가구 주택","아파트","연립 / 빌라 / 다세대 주택"])
 with c4: h_size = st.number_input("전용 면적 (평)", min_value=10, value=30)
@@ -280,7 +260,7 @@ with c4: h_size = st.number_input("전용 면적 (평)", min_value=10, value=30)
 # ── 평수 기반 축열조 크기 직관적 안내 ──
 if h_size < 20:
     tank_size = "약 350L"; tank_ref = "소형 냉장고 1대 크기 🧊"
-elif h_size < 35:
+elif h_size < 34:
     tank_size = "약 550L"; tank_ref = "워시타워 1대 설치 공간 🧺"
 else:
     tank_size = "약 800L 이상"; tank_ref = "약 0.9평의 여유 공간 룸 🚪"
@@ -289,11 +269,41 @@ st.markdown(f"""
 <div style='background-color: #f8fafc; border-left: 4px solid #3b82f6; padding: 16px; margin-top: 12px; border-radius: 4px;'>
     <div style='color: #1e293b; font-weight: 700; margin-bottom: 4px; font-size: 1.05rem;'>📐 우리 집 맞춤 설치 공간 안내</div>
     <div style='color: #475569; font-size: 0.95rem;'>
-        입력하신 평수(<b>{h_size}평</b>)를 기준으로 할 때, 대략 <b>{tank_size}</b> 용량의 축열조(버퍼탱크)가 필요할 것으로 예상됩니다.<br>
-        👉 체감상 <b>{tank_ref}</b>가 필요하다고 생각하시면 이해하기 쉽습니다!
+        입력하신 평수(<b>{h_size}평</b>)를 기준으로 할 때, 대략 <b>{tank_size}</b> 용량의 축열조(버퍼탱크)가 필요할 것으로 예상됩니다. 
+        [cite: 1, 2] <br>
+        👉 체감상 <b>{tank_ref}</b>가 필요하다고 생각하시면 이해하기 쉽습니다! [cite: 2]
     </div>
 </div>
 """, unsafe_allow_html=True)
+
+# ── 지역별 기후 및 COP 시각화 ─────────────────────────
+st.markdown('<div class="section-title">📊 우리 동네 기후 및 히트펌프 효율 분석</div>', unsafe_allow_html=True)
+
+if df_temp is not None and df_cop is not None:
+    # 1. 해당 지역 데이터만 필터링
+    region_data = df_temp[df_temp['지점명'].astype(str).str.contains(s_reg, na=False)].copy()
+    
+    if not region_data.empty:
+        # 데이터 정렬 (온도 순)
+        region_data = region_data.sort_values(by='외기온도')
+        
+        c_chart, c_text = st.columns([2, 1])
+        
+        with c_chart:
+            st.markdown(f"**🌡️ {s_reg}의 연간 외기온도 분포 (시간)**")
+            st.bar_chart(region_data.set_index('외기온도')['시간'], height=250)
+            
+        with c_text:
+            st.markdown("<br><br>", unsafe_allow_html=True)
+            st.success(f"""
+            **✅ {s_reg} 맞춤형 효율(SCOP)**
+            # {dynamic_cop}
+            """)
+            st.caption(f"""
+            히트펌프는 날씨가 따뜻할수록 효율이 올라갑니다. 
+            좌측 그래프를 보면 **{s_reg}** 지역이 1년 중 어떤 온도에 가장 오래 머무는지 알 수 있습니다. 
+            이 온도 분포를 히트펌프 성능과 결합하여 도출한 실제 체감 효율이 **{dynamic_cop}**입니다! (일반 전기히터 대비 약 {dynamic_cop}배의 열을 냅니다)
+            """)
 
 # 2. 에너지 현황
 st.markdown('<div class="section-title">2. 에너지 소비 및 인프라 현황</div>', unsafe_allow_html=True)
@@ -320,7 +330,6 @@ cs1, cs2 = st.columns(2)
 with cs1:
     f_inf    = st.slider("화석연료 물가 인상률 (연평균, %)", 0.0, 15.0, 5.0)
     e_inf    = st.slider("전기요금 물가 인상률 (연평균, %)", 0.0, 15.0, 3.0)
-    # EV 할인 체크박스 삭제됨
 
 with cs2:
     sub_nat   = st.checkbox("정부 무상 보조금 적용 (최대 320만원)", value=True)
@@ -381,7 +390,8 @@ if st.session_state.analyzed:
                        MONTH_TOU[m] if "TOU" in tariff else MONTH_SEASON[m], hp_kw)
         for m in months
     )
-# 연간 HP 추가 전기요금 (EV 할인 수식 완전히 제거됨!)
+    
+    # 연간 HP 추가 전기요금
     ann_hp_add = sum(
         (calc_elec_bill(base_kwh[m-1]+hp_add_m[m-1], tariff,
                         MONTH_TOU[m] if "TOU" in tariff else MONTH_SEASON[m], hp_kw)
@@ -389,6 +399,7 @@ if st.session_state.analyzed:
                           MONTH_TOU[m] if "TOU" in tariff else MONTH_SEASON[m], hp_kw))
         for m in months
     )
+    
     # 연간 PV 절감
     ann_pv = sum(
         min(pv_kwh_m[m-1], hp_add_m[m-1]) * (214.6/10_000)
@@ -431,7 +442,7 @@ if st.session_state.analyzed:
     with cc: st.markdown(f"""
 <div class='calc-box'><div class='calc-label'>1월 HP 추가 전력</div>
 <div class='calc-value'>{hp_jan_kwh:,.0f} kWh</div>
-<div style='color:#64748b;font-size:0.8rem'>난방비 {w_heat}만원 역산 (COP {HP_COP_WINTER})</div></div>""",
+<div style='color:#64748b;font-size:0.8rem'>난방비 {w_heat}만원 역산 (SCOP {dynamic_cop})</div></div>""",
         unsafe_allow_html=True)
     with cd: st.markdown(f"""
 <div class='calc-box'><div class='calc-label'>연간 PV 절감 (추정)</div>
@@ -481,7 +492,7 @@ if st.session_state.analyzed:
             ).properties(height=350),
             use_container_width=True)
 
-# ── 월별 비교표 ──────────────────────────────────────
+    # ── 월별 비교표 ──────────────────────────────────────
     st.markdown("**월별 전기요금 상세 비교 (히트펌프 전환 전·후)**")
     mn = ["1월","2월","3월","4월","5월","6월","7월","8월","9월","10월","11월","12월"]
     bef, aft, hpa, pvs = [], [], [], []
@@ -489,7 +500,6 @@ if st.session_state.analyzed:
         s = MONTH_TOU[m] if "TOU" in tariff else MONTH_SEASON[m]
         b = calc_elec_bill(base_kwh[m-1], tariff, s, hp_kw)
         
-        # ❌ EV 할인 관련 수식 제거 완료! 순수하게 합산된 전력량만으로 요금을 계산합니다.
         a = calc_elec_bill(base_kwh[m-1]+hp_add_m[m-1], tariff, s, hp_kw)
         
         pv = min(pv_kwh_m[m-1], hp_add_m[m-1]) * (214.6/10_000)
@@ -538,9 +548,9 @@ if st.session_state.analyzed:
         # (항목명,          값,              단위,    비고)
         ("동절기 난방비",        w_heat,      "만원",  "1월 기준 직접 입력"),
         ("동절기 전기요금",      w_elec,      "만원",  "1월 청구서 금액"),
-        ("1월 추정 전기사용량",  cur_kwh,     "kWh",   f"{tariff} 역산값"),
-        ("추정 HP 용량",         hp_kw,       "kW",    f"{h_size}평 × 환경계수 자동추정"),
-        ("1월 HP 추가 전력",     hp_jan_kwh,  "kWh",   f"COP {HP_COP_WINTER} 기준 역산"),
+        ("1월 추정 전기사용량",  cur_kwh,      "kWh",   f"{tariff} 역산값"),
+        ("추정 HP 용량",         hp_kw,        "kW",    f"{h_size}평 × 환경계수 자동추정"),
+        ("1월 HP 추가 전력",     hp_jan_kwh,  "kWh",   f"SCOP {dynamic_cop} 기준 역산"),
         ("태양광 설비 용량",     s_capa,      "kW",    "직접 입력"),
         ("연간 PV 발전량",       round(sum(reg_pv)*s_capa, 1), "kWh", f"{s_reg} 지역 실측 기준"),
         ("화석연료 물가 인상률", f_inf/100,   "%",     "연평균 복리"),
