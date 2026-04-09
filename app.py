@@ -288,8 +288,6 @@ if st.session_state.analyzed:
     # 1월 HP 추가 전력
     hp_jan_kwh = heat_to_hp_kwh(w_heat, heating_sys)
 
-    ev_disc = 0.60 if apply_ev else 1.0
-
     # 월별 계산
     reg_pv = pv_monthly_data[s_reg]
     months = list(range(1,13))
