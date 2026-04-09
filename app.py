@@ -171,10 +171,15 @@ def estimate_hp_kw(size, htype):
 # UI
 # ════════════════════════════════════════════════════════════
 col_t, col_l = st.columns([6,1])
-with col_t: st.title("히트펌프 경제성 분석 솔루션")
+with col_t: 
+    st.title("히트펌프 경제성 분석 솔루션")
 with col_l:
-    imgs = glob.glob("*.jpg")+glob.glob("*.jpeg")+glob.glob("*.png")
-    if imgs: st.image(Image.open(imgs[0]), use_container_width=True)
+    # 깃허브에 올린 로고 파일명으로 정확하게 변경해 주세요 (예: logo.png)
+    logo_path = "logo.png"
+    
+    # 파일이 존재하는지 확인 후 로고 출력
+    if os.path.exists(logo_path):
+        st.image(Image.open(logo_path), use_container_width=True)
 
 st.markdown("""
 <div class='info-box'>
