@@ -64,7 +64,7 @@ pv_monthly_data = {
     "제주도": [64.22,66.80,87.12,116.14,104.49,92.97,107.64,84.75,78.96,81.85,79.21,66.59]
 }
 
-# ── 2. 유틸리티 및 데이터 파서 ──
+# ── 2. 데이터 처리 엔진 ──
 def map_region_to_zone(s_reg):
     if s_reg == "강원도": return "중부1"
     if s_reg in ["대구","부산","울산","광주","경상남도","전라남도"]: return "남부"
@@ -130,13 +130,12 @@ def heat_to_hp_kwh(heat_man, boiler_type, cop=3.0):
     eff = BOILER_EFF.get(boiler_type, 0.85); price = FUEL_PRICE_PER_MJ.get(boiler_type, 68.0)
     return round(((heat_man * 10000) / price) / 3.6 * eff / cop, 1)
 
-# ── 3. 메인 UI 및 설명 복구 ──
+# ── 3. UI 메인 ──
 col_t, col_l = st.columns([6,1])
 with col_t: st.title("히트펌프 경제성 분석 솔루션")
 with col_l:
     if os.path.exists("logo.png"): st.image(Image.open("logo.png"), use_container_width=True)
 
-# [설명 개요 박스 복구]
 st.markdown("""
 <div class='info-box'>
   <h4 class='info-title'>💡 솔루션 개요</h4>
@@ -158,13 +157,11 @@ c3,c4 = st.columns(2)
 with c3: h_type = st.selectbox("주거 형태", ["단독 주택 / 다가구 주택","아파트","연립 / 빌라 / 다세대 주택"])
 with c4: h_size = st.number_input("전용 면적 (평)", min_value=10, value=30)
 
-# [평수 기반 공간 안내 복구]
 if h_size < 20: ts, tr = "약 350L", "소형 냉장고 1대 크기 🧊"
 elif h_size < 35: ts, tr = "약 550L", "워시타워 1대 설치 공간 🧺"
 else: ts, tr = "약 800L 이상", "약 0.9평의 여유 공간 룸 🚪"
 st.markdown(f"<div style='background-color: #f8fafc; border-left: 4px solid #3b82f6; padding: 16px; margin-top: 12px; border-radius: 4px;'><div style='color: #1e293b; font-weight: 700; margin-bottom: 4px; font-size: 1.05rem;'>📐 우리 집 맞춤 설치 공간 안내</div><div style='color: #475569; font-size: 0.95rem;'>입력하신 <b>{h_size}평</b> 기준, <b>{ts}</b> 용량의 축열조가 필요합니다. 👉 실내 설치 시 <b>{tr}</b>가 필요합니다!</div></div>", unsafe_allow_html=True)
 
-# [기후 그래프 복구]
 zone = map_region_to_zone(s_reg); dynamic_cop = 3.0
 st.markdown('<div class="section-title">📊 우리 동네 기후 및 히트펌프 효율 분석</div>', unsafe_allow_html=True)
 if df_temp is not None and df_cop is not None:
@@ -196,15 +193,16 @@ with cv2: w_elec = st.number_input("동절기(1월) 전기요금 (만원)", valu
 st.markdown('<div class="section-title">3. 시뮬레이션 상세 변수</div>', unsafe_allow_html=True)
 cs1, cs2 = st.columns(2)
 with cs1:
-    f_inf = st.slider("화석연료 인상률 (%)", 0.0, 15.0, 5.0)
+    f_inf = st.slider("가스/등유요금 인상률 (%)", 0.0, 15.0, 5.0) # 명칭 변경
     e_inf = st.slider("전기요금 인상률 (%)", 0.0, 15.0, 3.0)
     s_capa = st.number_input("태양광 용량 (kW)", value=3.0)
 with cs2:
-    # [보조금 상하 배치 복구]
-    sub_nat = st.checkbox("정부 무상 보조금 적용 (320만원)", value=True)
-    is_south = s_reg in ["제주도","경상남도","전라남도","부산","울산","광주"]
-    sub_loc = st.checkbox("지자체 매칭 보조금 적용 (최대 240만원)", value=is_south)
-    # [요금제 선택 부활]
+    # ── 보조금 금액 및 문구 수정 ──
+    sub_nat = st.checkbox("정부 무상 보조금 적용 (560만원)", value=True)
+    is_south = s_reg in ["제주도","경상남도","전라남도"]
+    sub_loc = st.checkbox("지자체 매칭 보조금 적용 (280만원)", value=is_south)
+    st.caption("*2026년 현재 제주, 경남, 전남은 보조금 신청이 가능합니다.")
+    
     elec_tariff = st.selectbox("전기 요금제 선택", ["주택용 누진제 (저압)", "주택용 누진제 (고압)", "계시별 요금제 TOU (제주)"])
 
 if "analyzed" not in st.session_state: st.session_state.analyzed = False
@@ -220,10 +218,10 @@ if st.session_state.analyzed:
     
     ann_heat_base = w_heat * 4.8
     ann_elec_base = calc_elec_bill(cur_k, elec_tariff) * 12
-    total_sub = (320 if sub_nat else 0) + (240 if sub_loc else 0)
+    total_sub = (560 if sub_nat else 0) + (280 if sub_loc else 0) # 보조금 수치 반영
     net_cap = max(0, 600 + h_size * 10 - total_sub)
     ann_pv_save = sum(min(pv, hp) * (214.6/10000) for pv, hp in zip(pv_gen, hp_add))
-    ann_hp_net_op = (ann_heat_base / dynamic_cop) * 0.85 # HP 연간 운영비 보정
+    ann_hp_net_op = (ann_heat_base / dynamic_cop) * 0.85
 
     years, gas_cum, hp_cum, net_p = list(range(1,16)), [], [], []
     g_sum, h_sum, payback = 0.0, float(net_cap), "15년 초과"
@@ -236,20 +234,19 @@ if st.session_state.analyzed:
 
     st.markdown('<div class="section-title">분석 결과 요약</div>', unsafe_allow_html=True)
     ca, cb, cc = st.columns(3)
-    ca.metric("투자 회수 시점", payback); cb.metric("15년 순이익", f"{net_p[-1]:,} 만원"); cc.metric("적용 sCOP", f"{dynamic_cop}")
+    ca.metric("투자 회수 시점", payback); cb.metric("15년 누적 순이익", f"{net_p[-1]:,} 만원"); cc.metric("적용 sCOP", f"{dynamic_cop}")
 
-    # [그래프 복구]
     g1, g2 = st.columns(2)
     with g1:
         st.write("**15년 누적 비용 흐름 (Cumulative Cost)**")
-        df_a = pd.DataFrame({"연도":years, "기존":gas_cum, "HP":hp_cum}).melt("연도", var_name="시나리오", value_name="비용")
+        df_a = pd.DataFrame({"연도":years, "기존 유지":gas_cum, "HP 전환":hp_cum}).melt("연도", var_name="시나리오", value_name="비용")
         st.altair_chart(alt.Chart(df_a).mark_area(opacity=0.5).encode(x="연도:O", y=alt.Y("비용:Q", title="비용 (만원)"), color="시나리오:N"), use_container_width=True)
     with g2:
         st.write("**연도별 순수익 (Cash Flow)**")
         df_c = pd.DataFrame({"연도":years, "순수익":net_p, "상태":["수익" if p>0 else "회수" for p in net_p]})
         st.altair_chart(alt.Chart(df_c).mark_bar().encode(x="연도:O", y=alt.Y("순수익:Q", title="이익 (만원)"), color="상태:N"), use_container_width=True)
 
-    # ════ 고도화된 3탭 엑셀 리포트 복구 ════
+    # ════ 고도화된 3탭 엑셀 리포트 ════
     wb = Workbook()
     hf = PatternFill(start_color="1E293B", end_color="1E293B", fill_type="solid")
     sf = PatternFill(start_color="F1F5F9", end_color="F1F5F9", fill_type="solid")
@@ -258,10 +255,10 @@ if st.session_state.analyzed:
     thin = Border(left=Side(style="thin"), right=Side(style="thin"), top=Side(style="thin"), bottom=Side(style="thin"))
     center, right = Alignment(horizontal="center"), Alignment(horizontal="right")
 
-    # [시트 1: 입력가정]
+    # [1] 시트: 입력 가정
     ws1 = wb.active; ws1.title = "①입력_가정"
     ws1.merge_cells("A1:D1"); ws1["A1"] = f"히트펌프 분석 마스터 가정 ({s_reg})"; ws1["A1"].fill = hf; ws1["A1"].font = fw; ws1["A1"].alignment = center
-    rows1 = [("항목", "값", "단위", "비고"), ("1월 난방비", w_heat, "만원", "입력"), ("1월 전기요금", w_elec, "만원", "입력"), ("지역 sCOP", dynamic_cop, "-", "기상연동"), ("설비 CAPEX", 600+h_size*10, "만원", ""), ("정부 보조금", 320 if sub_nat else 0, "만원", ""), ("지방 보조금", 240 if sub_loc else 0, "만원", ""), ("순 투자비", net_cap, "만원", "=B7-B8-B9")]
+    rows1 = [("항목", "값", "단위", "비고"), ("1월 난방비", w_heat, "만원", "입력"), ("1월 전기요금", w_elec, "만원", "입력"), ("지역 sCOP", dynamic_cop, "-", "기상연동"), ("설비 CAPEX", 600+h_size*10, "만원", ""), ("정부 보조금", 560 if sub_nat else 0, "만원", ""), ("지방 보조금", 280 if sub_loc else 0, "만원", ""), ("순 투자비", net_cap, "만원", "=B7-B8-B9")]
     for ri, rdata in enumerate(rows1, 3):
         for ci, val in enumerate(rdata, 1):
             c = ws1.cell(row=ri, column=ci, value=val); c.border=thin
@@ -269,7 +266,7 @@ if st.session_state.analyzed:
             elif ci==2 and ri!=10: c.font=fi; c.alignment=right
     ws1["B10"]="=B7-B8-B9"; ws1.column_dimensions["A"].width=20
 
-    # [시트 2: 월별 상세]
+    # [2] 시트: 월별 상세
     ws2 = wb.create_sheet("②월별_운영_상세")
     ws2.merge_cells("A1:G1"); ws2["A1"] = "월별 상세 에너지 비용 시뮬레이션"; ws2["A1"].fill = hf; ws2["A1"].font = fw; ws2["A1"].alignment = center
     h2 = ["월", "기존 난방비", "HP전력(kWh)", "HP 운영비(만)", "PV 절감(만)", "Net 운영비", "절감액"]
@@ -286,7 +283,7 @@ if st.session_state.analyzed:
             for ci in range(1, 8): ws2.cell(row=r, column=ci).fill = pf
     for col in "ABCDEFG": ws2.column_dimensions[col].width=15
 
-    # [시트 3: 15년 분석]
+    # [3] 시트: 15년 분석
     ws3 = wb.create_sheet("③15년_재무_분석")
     ws3.merge_cells("A1:H1"); ws3["A1"] = "장기 투자 회수 및 NPV 분석"; ws3["A1"].fill = hf; ws3["A1"].font = fw; ws3["A1"].alignment = center
     h3 = ["연도", "물가지수", "기존 OPEX", "HP OPEX", "연간 순이익", "누적 NPV", "ROI", "상태"]
@@ -307,4 +304,4 @@ if st.session_state.analyzed:
 
     buf = io.BytesIO(); wb.save(buf)
     st.markdown("---")
-    st.download_button(label="🚀 전문가용 고도화 엑셀 리포트 다운로드", data=buf.getvalue(), file_name=f"Expert_Analysis_{s_reg}.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", use_container_width=True)
+    st.download_button(label="🚀 전문가용 고도화 엑셀 리포트 다운로드 (수식 연동)", data=buf.getvalue(), file_name=f"Expert_Analysis_{s_reg}.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", use_container_width=True)
