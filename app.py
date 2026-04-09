@@ -168,6 +168,66 @@ def estimate_hp_kw(size, htype):
     return round(size * rate, 1)
 
 # ════════════════════════════════════════════════════════════
+# 🌟 기상 데이터 및 COP 매핑 (업그레이드 엔진)
+# ════════════════════════════════════════════════════════════
+@st.cache_data
+def load_simulation_data():
+    """두 개의 CSV 파일을 메모리에 한 번만 불러와서 속도를 높입니다."""
+    try:
+        # [데이터 출처] 깃허브에 업로드된 CSV 파일
+        df_temp = pd.read_csv("외기온도_시간분포.csv")
+        df_cop = pd.read_csv("COP_계산기.csv")
+        return df_temp, df_cop
+    except Exception as e:
+        return None, None
+
+def calculate_regional_scop(region_name, df_temp, df_cop, water_temp="50"):
+    """
+    [연구원 테스트용 로직 설명]
+    1. '외기온도_시간분포.csv'에서 현재 선택된 지역(지점명)의 데이터만 걸러냅니다.
+    2. 해당 지역이 각각의 '외기온도'에서 몇 '시간'을 보냈는지 확인합니다.
+    3. 'COP_계산기.csv'에서 그 '외기온도'와 목표 '출수온도(예: 50도)'가 교차하는 COP 값을 찾습니다.
+    4. (COP값 × 머문 시간)을 모두 더한 뒤, 총 시간으로 나누어 해당 지역만의 '가중 평균 효율(SCOP)'을 도출합니다.
+    -> 이 값이 기존의 고정된 HP_COP_WINTER(3.0)를 대체하게 됩니다!
+    """
+    if df_temp is None or df_cop is None:
+        return HP_COP_WINTER  # 파일이 없을 경우 기존 3.0 고정값 사용
+
+    try:
+        # 1. 지역 데이터 필터링 (글자가 포함되어 있으면 매칭)
+        region_data = df_temp[df_temp['지점명'].astype(str).str.contains(region_name, na=False)]
+        
+        if region_data.empty:
+            return HP_COP_WINTER
+
+        total_hours = 0
+        weighted_cop_sum = 0.0
+
+        # 2. 온도별 시간 가중 평균 COP 계산
+        for _, row in region_data.iterrows():
+            oat = row['외기온도']  # 엑셀의 '외기온도' 열
+            hours = row['시간']    # 엑셀의 '시간' 열
+
+            # 3. COP 테이블에서 해당 외기온도의 행을 찾음
+            cop_row = df_cop[df_cop['외기온도'] == oat]
+            if not cop_row.empty:
+                # 출수온도 50도 기준의 컬럼값 추출 (문자열 '50' 컬럼)
+                cop_value = cop_row.iloc[0][str(water_temp)]
+                
+                # 4. 가중치 합산
+                weighted_cop_sum += (cop_value * hours)
+                total_hours += hours
+
+        if total_hours == 0:
+            return HP_COP_WINTER
+
+        # 최종 맞춤형 SCOP 리턴
+        scop = weighted_cop_sum / total_hours
+        return round(scop, 2)
+    except Exception as e:
+        return HP_COP_WINTER # 에러 발생 시 안전하게 3.0 리턴
+
+# ════════════════════════════════════════════════════════════
 # UI
 # ════════════════════════════════════════════════════════════
 col_t, col_l = st.columns([6,1])
@@ -193,23 +253,37 @@ st.markdown("""
 
 # 1. 기본 정보
 st.markdown('<div class="section-title">1. 대상지 기본 정보</div>', unsafe_allow_html=True)
+
+# (1) CSV 데이터 불러오기
+df_temp, df_cop = load_simulation_data()
+
 c1,c2 = st.columns(2)
 with c1: s_reg  = st.selectbox("광역 지자체", list(pv_monthly_data.keys()), index=8)
 with c2: s_sub  = st.selectbox("기초 지자체", regions_full.get(s_reg, ["전체"]))
+
+# (2) 선택된 광역 지자체(s_reg)를 바탕으로 맞춤형 SCOP 실시간 계산
+dynamic_cop = calculate_regional_scop(s_reg, df_temp, df_cop)
+
+# (3) 연구원 테스트용 작동 원리 안내 패널 출력
+if df_temp is not None and df_cop is not None:
+    st.info(f"""
+    💡 **스마트 기후 시뮬레이션 작동 중 (내부 테스트/검증용 안내)**
+    * **데이터 매핑:** `외기온도_시간분포.csv`의 **[{s_reg}]** 기상 데이터와 `COP_계산기.csv`의 성능 곡선(출수 50도 기준)을 실시간 결합 중입니다.
+    * **적용 결과:** 기존 고정 효율(COP 3.0) 대신, 두 데이터를 곱해 산출한 **[{s_reg} 맞춤형 평균 효율(SCOP) : {dynamic_cop}]** 이 적용되었습니다!
+    * **어떻게 변하나요?** 타 지역을 선택해 보세요. 이 평균 효율({dynamic_cop}) 값이 계산기 내부의 `heat_to_hp_kwh()` 함수에 직접 주입되어, **'1월 HP 추가 전력(kWh)'**을 증감시키고 결과적으로 **투자 회수 시점**을 변화시킵니다.
+    """)
+
 c3,c4 = st.columns(2)
 with c3: h_type = st.selectbox("주거 형태", ["단독 주택 / 다가구 주택","아파트","연립 / 빌라 / 다세대 주택"])
 with c4: h_size = st.number_input("전용 면적 (평)", min_value=10, value=30)
 
-# ── [추가됨] 평수 기반 축열조 크기 직관적 안내 ─────────────────────────
+# ── 평수 기반 축열조 크기 직관적 안내 ──
 if h_size < 20:
-    tank_size = "약 350L"
-    tank_ref = "소형 냉장고 1대 크기 🧊"
+    tank_size = "약 350L"; tank_ref = "소형 냉장고 1대 크기 🧊"
 elif h_size < 35:
-    tank_size = "약 550L"
-    tank_ref = "워시타워 1대 설치 공간 🧺"
+    tank_size = "약 550L"; tank_ref = "워시타워 1대 설치 공간 🧺"
 else:
-    tank_size = "약 800L 이상"
-    tank_ref = "약 0.9평의 여유 공간 룸 🚪"
+    tank_size = "약 800L 이상"; tank_ref = "약 0.9평의 여유 공간 룸 🚪"
 
 st.markdown(f"""
 <div style='background-color: #f8fafc; border-left: 4px solid #3b82f6; padding: 16px; margin-top: 12px; border-radius: 4px;'>
@@ -285,8 +359,8 @@ if st.session_state.analyzed:
     # 현재 kWh 역산
     cur_kwh = reverse_kwh(w_elec, tariff, jan_s, hp_kw)
 
-    # 1월 HP 추가 전력
-    hp_jan_kwh = heat_to_hp_kwh(w_heat, heating_sys)
+    # 1월 HP 추가 전력 (여기서 지역별 맞춤 효율이 들어갑니다!)
+    hp_jan_kwh = heat_to_hp_kwh(w_heat, heating_sys, cop=dynamic_cop)
 
     # 월별 계산
     reg_pv = pv_monthly_data[s_reg]
