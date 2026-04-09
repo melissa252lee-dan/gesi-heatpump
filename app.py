@@ -1,7 +1,7 @@
 import streamlit as st
 import pandas as pd
 import numpy as np
-import io, os, glob
+import io, os
 from PIL import Image
 from openpyxl import Workbook
 from openpyxl.styles import Font, Alignment, PatternFill, Border, Side
@@ -9,7 +9,7 @@ import altair as alt
 
 st.set_page_config(page_title="히트펌프 경제성 분석 솔루션", layout="wide")
 
-# ── 1. 스타일 및 기초 지자체 데이터 정의 ──
+# ── 1. 스타일 및 전체 지자체 데이터 ──
 st.markdown("""
 <style>
 @import url('https://cdn.jsdelivr.net/gh/orioncactus/pretendard/dist/web/static/pretendard.css');
@@ -24,7 +24,6 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# 기초 지자체 전체 리스트
 regions_full = {
     "서울": ["종로구","중구","용산구","성동구","광진구","동대문구","중랑구","성북구","강북구","도봉구","노원구","은평구","서대문구","마포구","양천구","강서구","구로구","금천구","영등포구","동작구","관악구","서초구","강남구","송파구","강동구"],
     "인천": ["중구","동구","미추홀구","연수구","남동구","부평구","계양구","서구","강화군","옹진군"],
@@ -65,7 +64,7 @@ pv_monthly_data = {
     "제주도": [64.22,66.80,87.12,116.14,104.49,92.97,107.64,84.75,78.96,81.85,79.21,66.59]
 }
 
-# ── 2. 유틸리티 및 데이터 파서 ──
+# ── 2. 데이터 처리 및 엔진 ──
 def map_region_to_zone(s_reg):
     if s_reg == "강원도": return "중부1"
     if s_reg in ["대구","부산","울산","광주","경상남도","전라남도"]: return "남부"
@@ -78,12 +77,9 @@ def load_simulation_data():
         def read_csv_safe(filename):
             try: return pd.read_csv(filename, encoding="utf-8", header=None)
             except: return pd.read_csv(filename, encoding="cp949", header=None)
-        
         df_t = read_csv_safe("외기온도_시간분포.csv")
         df_c = read_csv_safe("COP_계산기.csv")
-
-        # 온도 분포
-        temp_data = {}
+        temp_data, cop_data = {}, {}
         target_zones = ["중부1", "중부2", "남부", "제주"]
         curr = None
         for _, row in df_t.iterrows():
@@ -95,9 +91,6 @@ def load_simulation_data():
             if curr and head.isdigit() and 0 <= int(head) <= 23:
                 vals = [float(v) if pd.notna(v) else 0.0 for v in row[1:13]]
                 if len(vals) == 12: temp_data[curr].append(vals)
-
-        # sCOP
-        cop_data = {}
         header_idx = -1
         for idx, row in df_c.iterrows():
             if str(row[0]).strip() == "지역": header_idx = idx; break
@@ -107,7 +100,6 @@ def load_simulation_data():
                 if z_name in target_zones:
                     try: cop_data[z_name] = {'scop': float(row[15])}
                     except: continue
-        
         defaults = {"중부1": 3.29, "중부2": 3.66, "남부": 3.99, "제주": 4.21}
         for k, v in defaults.items():
             if k not in cop_data: cop_data[k] = {'scop': v}
@@ -116,6 +108,7 @@ def load_simulation_data():
 
 BOILER_EFF = { "가스 컨덴싱 보일러": 0.92, "일반 가스 보일러": 0.82, "등유 보일러": 0.85, "LPG 보일러": 0.82 }
 FUEL_PRICE_PER_MJ = { "가스 컨덴싱 보일러": 68.0, "일반 가스 보일러": 68.0, "등유 보일러": 95.0, "LPG 보일러": 105.0 }
+HP_MONTHLY_LOAD = [1.0, 0.9, 0.4, 0.15, 0.05, 0.05, 0.05, 0.05, 0.05, 0.15, 0.4, 0.85]
 
 def calc_elec_bill(kwh, tariff="주택용 누진제 (저압)"):
     kwh = max(kwh, 0)
@@ -136,7 +129,7 @@ def heat_to_hp_kwh(heat_man, boiler_type, cop=3.0):
     eff = BOILER_EFF.get(boiler_type, 0.85); price = FUEL_PRICE_PER_MJ.get(boiler_type, 68.0)
     return round(((heat_man * 10000) / price) / 3.6 * eff / cop, 1)
 
-# ── 3. UI 및 시각화 ──
+# ── 3. UI ──
 col_t, col_l = st.columns([6,1])
 with col_t: st.title("히트펌프 경제성 분석 솔루션")
 with col_l:
@@ -153,19 +146,25 @@ c3,c4 = st.columns(2)
 with c3: h_type = st.selectbox("주거 형태", ["단독 주택 / 다가구 주택","아파트","연립 / 빌라 / 다세대 주택"])
 with c4: h_size = st.number_input("전용 면적 (평)", min_value=10, value=30)
 
+# 평수 기반 안내 (복구됨)
+if h_size < 20: tank_size, tank_ref = "약 350L", "소형 냉장고 1대 크기 🧊"
+elif h_size < 35: tank_size, tank_ref = "약 550L", "워시타워 1대 설치 공간 🧺"
+else: tank_size, tank_ref = "약 800L 이상", "약 0.9평의 여유 공간 룸 🚪"
+st.markdown(f"<div style='background-color: #f8fafc; border-left: 4px solid #3b82f6; padding: 16px; margin-top: 12px; border-radius: 4px;'><div style='color: #1e293b; font-weight: 700; margin-bottom: 4px; font-size: 1.05rem;'>📐 우리 집 맞춤 설치 공간 안내</div><div style='color: #475569; font-size: 0.95rem;'>입력하신 <b>{h_size}평</b> 기준, <b>{tank_size}</b> 용량의 축열조가 필요합니다. 👉 체감상 <b>{tank_ref}</b>가 필요합니다!</div></div>", unsafe_allow_html=True)
+
+# 기후 그래프 (축 이름 복구됨)
 zone = map_region_to_zone(s_reg); dynamic_cop = 3.0
-st.markdown('<div class="section-title">📊 우리 동네 기후 및 히트펌프 효율 분석</div>', unsafe_allow_html=True)
+st.markdown('<div class="section-title">📊 지역 기후 기반 sCOP 분석</div>', unsafe_allow_html=True)
 if df_temp and df_cop:
     dynamic_cop = df_cop[zone]['scop']
-    days = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]
     all_temps = []
+    days = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]
     for h in range(len(df_temp[zone])):
         for m in range(12): all_temps.extend([round(df_temp[zone][h][m])] * days[m])
     counts = pd.Series(all_temps).value_counts().sort_index().reset_index()
     counts.columns = ['온도', '시간']
     cl1, cl2 = st.columns([2, 1])
     with cl1:
-        st.markdown(f"**🌡️ {s_reg}({zone}) 연간 온도별 발생 시간 분포**")
         c = alt.Chart(counts).mark_bar(color='#3b82f6').encode(
             x=alt.X('온도:Q', title='외기 온도 (°C)'),
             y=alt.Y('시간:Q', title='연간 누적 시간 (hours)'),
@@ -175,7 +174,7 @@ if df_temp and df_cop:
     with cl2:
         st.success(f"**✅ [{s_reg}] 맞춤 효율(sCOP)**\n# {dynamic_cop}"); st.caption("실제 기상 데이터를 반영한 연평균 효율")
 
-st.markdown('<div class="section-title">2. 에너지 소비 현황</div>', unsafe_allow_html=True)
+st.markdown('<div class="section-title">2. 에너지 소비 및 정책</div>', unsafe_allow_html=True)
 heating_sys = st.selectbox("현재 난방 설비", list(BOILER_EFF.keys()))
 cv1,cv2 = st.columns(2)
 with cv1: w_heat = st.number_input("동절기(1월) 난방비 (만원)", value=20)
@@ -187,18 +186,23 @@ with ct2: sub_nat = st.checkbox("정부 무상 보조금 적용 (320만원)", va
 if "analyzed" not in st.session_state: st.session_state.analyzed = False
 if st.button("경제성 분석 실행", type="primary", use_container_width=True): st.session_state.analyzed = True
 
-# ── 4. 분석 결과 및 엑셀 다운로드 ──
+# ── 4. 분석 결과 출력 ──
 if st.session_state.analyzed:
     hp_jan_kwh = heat_to_hp_kwh(w_heat, heating_sys, cop=dynamic_cop)
     cur_kwh = reverse_kwh(w_elec)
-    
-    # 15년 시뮬레이션
-    years = list(range(1,16))
-    ann_heat_base = w_heat * 4.5
-    ann_elec_base = calc_elec_bill(cur_kwh) * 12
+    months = list(range(1,13))
+    base_kwh_m = [cur_kwh * (1.15 if m in [7,8] else (1.05 if m in [6,9] else 1.0)) for m in months]
+    hp_add_m = [hp_jan_kwh * HP_MONTHLY_LOAD[m-1] for m in months]
+    pv_gen_m = [pv_monthly_data[s_reg][m-1]*s_capa for m in months]
+
+    ann_elec_base = sum(calc_elec_bill(k) for k in base_kwh_m)
+    ann_hp_add = sum(calc_elec_bill(k+h) - calc_elec_bill(k) for k, h in zip(base_kwh_m, hp_add_m))
+    ann_pv_save = sum(min(pv, hp) * (214.6/10000) for pv, hp in zip(pv_gen_m, hp_add_m))
+    ann_heat_base = w_heat * 4.8
     net_cap = max(0, 600 + h_size * 10 - (320 if sub_nat else 0))
-    
-    gas_cum, hp_cum, net_p = [], [], []
+    ann_hp_net = max(0, ann_hp_add - ann_pv_save)
+
+    years, gas_cum, hp_cum, net_p = list(range(1,16)), [], [], []
     g_sum, h_sum, payback = 0.0, float(net_cap), "15년 초과"
     for y in years:
         cg = ann_heat_base * (1.05**y) + ann_elec_base
@@ -211,73 +215,49 @@ if st.session_state.analyzed:
     ca, cb, cc = st.columns(3)
     ca.metric("투자 회수 시점", payback); cb.metric("15년 순이익", f"{net_p[-1]:,} 만원"); cc.metric("적용 sCOP", f"{dynamic_cop}")
 
-    # ════ 고도화된 3탭 인터랙티브 엑셀 생성 ════
+    # 상세 그래프 (복구됨)
+    st.markdown('<div class="section-title">📉 경제성 상세 시뮬레이션</div>', unsafe_allow_html=True)
+    g1, g2 = st.columns(2)
+    with g1:
+        st.write("**15년 누적 비용 흐름**")
+        df_a = pd.DataFrame({"연도":years, "기존 유지":gas_cum, "HP 전환":hp_cum}).melt("연도", var_name="시나리오", value_name="누적비용")
+        st.altair_chart(alt.Chart(df_a).mark_area(opacity=0.5).encode(x="연도:O", y=alt.Y("누적비용:Q", title="비용(만원)"), color="시나리오:N"), use_container_width=True)
+    with g2:
+        st.write("**연도별 순수익(Cash Flow)**")
+        df_c = pd.DataFrame({"연도":years, "순수익":net_p, "상태":["수익" if p>0 else "회수" for p in net_p]})
+        st.altair_chart(alt.Chart(df_c).mark_bar().encode(x="연도:O", y=alt.Y("순수익:Q", title="이익(만원)"), color="상태:N"), use_container_width=True)
+
+    # 월별 상세 표
+    st.markdown("**월별 운영 데이터 상세**")
+    st.dataframe(pd.DataFrame({"월": [f"{m}월" for m in months], "HP 추가전력(kWh)": [int(x) for x in hp_add_m], "PV 자가소비(만원)": [round(x,1) for x in [min(p,h)*(214.6/10000) for p,h in zip(pv_gen_m, hp_add_m)]]}), use_container_width=True, hide_index=True)
+
+    # ════ 3탭 인터랙티브 전문가용 엑셀 (복구됨) ════
     wb = Workbook()
     hf = PatternFill(start_color="1E293B", end_color="1E293B", fill_type="solid")
     sf = PatternFill(start_color="F1F5F9", end_color="F1F5F9", fill_type="solid")
-    fw = Font(color="FFFFFF", bold=True); fb = Font(bold=True)
-    fi = Font(color="0000FF", bold=True) # 입력가능한 셀 (파란색)
+    fw = Font(color="FFFFFF", bold=True); fb = Font(bold=True); fi = Font(color="0000FF", bold=True)
     thin = Border(left=Side(style="thin"), right=Side(style="thin"), top=Side(style="thin"), bottom=Side(style="thin"))
     center = Alignment(horizontal="center"); right = Alignment(horizontal="right")
 
-    # [시트 1: 입력 가정]
     ws1 = wb.active; ws1.title = "①입력_가정"
-    ws1.merge_cells("A1:D1"); ws1["A1"] = f"히트펌프 경제성 분석 입력 가정 ({s_reg})"; ws1["A1"].fill = hf; ws1["A1"].font = fw; ws1["A1"].alignment = center
-    ws1["A2"] = "※ 파란색 셀은 엑셀에서 직접 수정이 가능하며, 결과가 실시간 연동됩니다."; ws1["A2"].font = Font(italic=True, color="0369A1")
-    
+    ws1.merge_cells("A1:D1"); ws1["A1"] = f"히트펌프 경제성 분석 가정 ({s_reg})"; ws1["A1"].fill = hf; ws1["A1"].font = fw; ws1["A1"].alignment = center
     heads1 = ["항목", "값", "단위", "비고"]
-    for ci, h in enumerate(heads1, 1):
-        c = ws1.cell(row=3, column=ci, value=h); c.fill = sf; c.font = fb; c.border = thin; c.alignment = center
-    
-    rows1 = [
-        ("동절기 난방비", w_heat, "만원", "사용자 입력"), ("동절기 전기요금", w_elec, "만원", "사용자 입력"),
-        ("지역 맞춤 sCOP", dynamic_cop, "-", "기상 데이터 연동"), ("설비 CAPEX", 600+h_size*10, "만원", "설치 전 금액"),
-        ("보조금", 320 if sub_nat else 0, "만원", "정부 지원금"), ("순 투자비", net_cap, "만원", "=B7-B8")
-    ]
+    for ci, h in enumerate(heads1, 1): ws1.cell(row=3, column=ci, value=h).fill=sf; ws1.cell(row=3, column=ci).font=fb
+    rows1 = [("동절기 난방비", w_heat, "만원", ""), ("동절기 전기요금", w_elec, "만원", ""), ("맞춤 sCOP", dynamic_cop, "-", ""), ("설비 CAPEX", 600+h_size*10, "만원", ""), ("보조금", 320 if sub_nat else 0, "만원", ""), ("순 투자비", net_cap, "만원", "=B7-B8")]
     for ri, rdata in enumerate(rows1, 4):
         for ci, val in enumerate(rdata, 1):
-            c = ws1.cell(row=ri, column=ci, value=val); c.border = thin
-            if ci == 2 and ri != 9: c.font = fi; c.alignment = right # 파란색 폰트 (수정가능)
-    ws1["B9"] = "=B7-B8"; ws1["B9"].font = Font(bold=True); ws1.column_dimensions["A"].width = 25; ws1.column_dimensions["D"].width = 25
+            c = ws1.cell(row=ri, column=ci, value=val); c.border=thin
+            if ci==2 and ri!=9: c.font=fi; c.alignment=right
+    ws1["B9"]="=B7-B8"; ws1.column_dimensions["A"].width=20
 
-    # [시트 2: 월별 요금 상세]
     ws2 = wb.create_sheet("②월별_요금_비교")
-    ws2.merge_cells("A1:E1"); ws2["A1"] = "히트펌프 전환 전/후 월별 요금 상세 비교"; ws2["A1"].fill = hf; ws2["A1"].font = fw; ws2["A1"].alignment = center
-    heads2 = ["월", "기존 요금(만원)", "HP 전환 후(만원)", "절감액(만원)", "비고"]
-    for ci, h in enumerate(heads2, 1):
-        c = ws2.cell(row=2, column=ci, value=h); c.fill = sf; c.font = fb; c.border = thin; c.alignment = center
-    for m in range(1, 13):
-        r = m + 2; ws2.cell(row=r, column=1, value=f"{m}월").border = thin
-        ws2.cell(row=r, column=2, value=w_heat if m in [1,2,12] else w_heat*0.2).border = thin
-        ws2.cell(row=r, column=3, value=f"=B{r}/'①입력_가정'!$B$6").border = thin # 난방비 / COP
-        ws2.cell(row=r, column=4, value=f"=B{r}-C{r}").border = thin
-    for col in ["A","B","C","D","E"]: ws2.column_dimensions[col].width = 15
+    ws2.append(["월", "기존 난방비", "HP 추가전력(kWh)", "예상 절감액(만원)"])
+    for m in range(1, 13): ws2.append([f"{m}월", w_heat if m in [1,2,12] else 0, int(hp_add_m[m-1]), f"=B{m+1}-(C{m+1}/'①입력_가정'!$B$6*0.068)"])
 
-    # [시트 3: 15년 시뮬레이션]
     ws3 = wb.create_sheet("③15년_시뮬레이션")
-    ws3.merge_cells("A1:G1"); ws3["A1"] = "15년 장기 재무 현금흐름 시뮬레이션"; ws3["A1"].fill = hf; ws3["A1"].font = fw; ws3["A1"].alignment = center
-    heads3 = ["연차", "기존 누적비용", "HP 누적비용", "연간 절감액", "누적 이익(NPV)", "상태", "비고"]
-    for ci, h in enumerate(heads3, 1):
-        c = ws3.cell(row=2, column=ci, value=h); c.fill = sf; c.font = fb; c.border = thin; c.alignment = center
-    for y in range(1, 16):
-        r = y + 2; ws3.cell(row=r, column=1, value=f"{y}년차").border = thin
-        if y == 1:
-            ws3.cell(row=r, column=2, value=gas_cum[0]).border = thin
-            ws3.cell(row=r, column=3, value=f"='①입력_가정'!$B$9 + {hp_cum[0]-net_cap}").border = thin # 초기투자비 포함
-        else:
-            ws3.cell(row=r, column=2, value=gas_cum[y-1]).border = thin
-            ws3.cell(row=r, column=3, value=hp_cum[y-1]).border = thin
-        ws3.cell(row=r, column=4, value=f"=B{r}-C{r}").border = thin
-        ws3.cell(row=r, column=5, value=f"=B{r}-C{r}").border = thin
-        ws3.cell(row=r, column=6, value=f"=IF(E{r}>0, \"흑자전환\", \"회수중\")").border = thin
-    for col in ["A","B","C","D","E","F"]: ws3.column_dimensions[col].width = 18
+    ws3.append(["연차", "기존누적", "HP누적", "이익(NPV)"])
+    for y in years: ws3.append([y, gas_cum[y-1], f"=F{y+1}+'①입력_가정'!$B$9" if y==1 else hp_cum[y-1], f"=B{y+1}-C{y+1}"])
 
     buf = io.BytesIO(); wb.save(buf)
     st.markdown("---")
-    st.download_button(
-        label="🚀 수식 연동 인터랙티브 엑셀 다운로드 (고도화 버전)",
-        data=buf.getvalue(),
-        file_name=f"HeatPump_Analysis_{s_reg}_Expert.xlsx",
-        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        use_container_width=True
-    )
+    st.download_button(label="📊 전문가용 수식 연동 엑셀 다운로드", data=buf.getvalue(), file_name=f"HP_Analysis_{s_reg}.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", use_container_width=True)
