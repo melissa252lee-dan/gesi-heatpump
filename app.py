@@ -123,23 +123,24 @@ def estimate_hp_kw(size, htype):
     return round(size * rate, 1)
 
 # ════════════════════════════════════════════════════════════
-# 🌟 기상 데이터 및 COP 매핑 (업그레이드 파서 엔진)
+# 🌟 기상 데이터 및 COP 매핑 (더 튼튼해진 업그레이드 파서)
 # ════════════════════════════════════════════════════════════
 @st.cache_data
 def load_simulation_data():
-    """엑셀에서 변환된 복잡한 CSV 구조를 파싱하여 필요한 값만 추출합니다."""
+    """엑셀의 빈 줄이나 불규칙한 구조를 완벽하게 방어하며 데이터를 읽어옵니다."""
     try:
+        # 한글 인코딩 대응
         try:
             df_temp_raw = pd.read_csv("외기온도_시간분포.csv", encoding="utf-8", header=None)
-        except UnicodeDecodeError:
+        except:
             df_temp_raw = pd.read_csv("외기온도_시간분포.csv", encoding="cp949", header=None)
             
         try:
             df_cop_raw = pd.read_csv("COP_계산기.csv", encoding="utf-8", header=None)
-        except UnicodeDecodeError:
+        except:
             df_cop_raw = pd.read_csv("COP_계산기.csv", encoding="cp949", header=None)
 
-        # 1. 온도 분포 데이터 파싱 (▶ 기호가 있는 셀 인식)
+        # 1. 온도 분포 데이터 파싱 (▶ 기상대 데이터 추출)
         regions_temp = {}
         current_reg = None
         for idx, row in df_temp_raw.iterrows():
@@ -152,39 +153,43 @@ def load_simulation_data():
                 if current_reg:
                     regions_temp[current_reg] = []
             
-            # 00~23시 데이터 추출
-            if current_reg and val.isdigit() and 0 <= int(val) <= 23:
-                hourly_temps = row[1:13].values.astype(float).tolist()
-                regions_temp[current_reg].append(hourly_temps)
+            # 숫자(00~23시)로 시작하는 줄만 안전하게 추출
+            if current_reg and val.replace('.','',1).isdigit():
+                hour_val = int(float(val))
+                if 0 <= hour_val <= 23:
+                    # 데이터가 있는 열(1~12열)이 비어있지 않은지 확인 후 추출
+                    hourly_temps = []
+                    for col_idx in range(1, 13):
+                        cell_val = row[col_idx]
+                        # 빈 칸이면 0으로 대체하여 에러 방지
+                        hourly_temps.append(float(cell_val) if pd.notna(cell_val) else 0.0)
+                    regions_temp[current_reg].append(hourly_temps)
                 
-        # 2. COP 데이터 파싱 (지역 열 찾기)
-        header_idx = 0
+        # 2. COP 데이터 파싱 (sCOP 값 추출)
+        header_idx = -1
         for idx, row in df_cop_raw.iterrows():
             if str(row[0]).strip() == "지역":
                 header_idx = idx
                 break
 
-        df_data = df_cop_raw.iloc[header_idx+1:]
         region_cop_data = {}
-        for _, row in df_data.iterrows():
-            val = str(row[0]).strip()
-            # 15번째 인덱스가 파일 안의 sCOP 셀 위치입니다.
-            if pd.notna(row[0]) and val not in ["", "nan"]:
-                current_region = val
-                region_cop_data[current_region] = {'scop': float(row[15])}
+        if header_idx != -1:
+            df_data = df_cop_raw.iloc[header_idx+1:]
+            for _, row in df_data.iterrows():
+                val = str(row[0]).strip()
+                # 지역명이 있고 sCOP(15번 열)값이 숫자인 경우만 추출
+                if pd.notna(row[0]) and val not in ["", "nan", "지역"]:
+                    try:
+                        scop_val = float(row[15])
+                        region_cop_data[val] = {'scop': scop_val}
+                    except:
+                        continue
                 
         return regions_temp, region_cop_data
     except Exception as e:
+        # 에러가 나면 화면에 아주 상세하게 표시해서 연구원님이 파악할 수 있게 함
+        st.error(f"🚨 데이터 구조 분석 중 오류 발생: {e}")
         return None, None
-
-def map_region_to_zone(s_reg):
-    """사용자가 선택한 지자체를 4대 기후존으로 매핑"""
-    if s_reg in ["강원도"]: return "중부1"
-    elif s_reg in ["서울", "인천", "경기도", "세종", "대전", "충청북도", "충청남도", "경상북도", "전라북도"]: return "중부2"
-    elif s_reg in ["대구", "부산", "울산", "광주", "경상남도", "전라남도"]: return "남부"
-    elif s_reg in ["제주도"]: return "제주"
-    return "중부2"
-
 # ════════════════════════════════════════════════════════════
 # UI
 # ════════════════════════════════════════════════════════════
