@@ -510,10 +510,8 @@ with col_t: st.title("히트펌프 경제성 분석 솔루션")
 with col_l:
     if os.path.exists("logo.png"): st.image(Image.open("logo.png"), use_container_width=True)
 
-# CSV 로드 상태 표시
-if tariff_csv["source"] == "csv":
-    st.success("✅ 전기요금누진제.csv 로드 완료 — CSV 기반 요금 계산 적용 중")
-else:
+# CSV 로드 실패 시에만 경고 표시 (성공 시 별도 메시지 없음)
+if tariff_csv["source"] != "csv":
     st.warning(f"⚠️ 전기요금누진제.csv 로드 실패 → 하드코딩 fallback 요금 적용 중  |  사유: {tariff_csv.get('error','')}")
 
 st.markdown("""
@@ -567,6 +565,12 @@ st.markdown('<div class="section-title">2. 에너지 소비 현황</div>', unsaf
 cv1, cv2 = st.columns(2)
 with cv1: w_heat = st.number_input("동절기(1월) 평균 난방비 (만원)", value=20)
 with cv2: w_elec = st.number_input("동절기(1월) 전기요금 (만원)", value=6)
+
+# 입력값이 바뀌면 이전 분석 결과 초기화 → 반드시 버튼 다시 눌러야 최신값으로 재계산
+_input_key = (w_heat, w_elec, s_reg, h_type, h_size)
+if st.session_state.get("_last_input_key") != _input_key:
+    st.session_state.analyzed = False
+    st.session_state["_last_input_key"] = _input_key
 
 # ── 섹션 3: 시뮬레이션 변수 ──
 st.markdown('<div class="section-title">3. 시뮬레이션 상수 변수</div>', unsafe_allow_html=True)
