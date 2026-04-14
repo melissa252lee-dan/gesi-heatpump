@@ -171,7 +171,16 @@ def load_tariff_csv():
         except: return pd.read_csv(f, encoding="cp949", header=None)
 
     try:
-        df = read_safe("전기요금누진제.csv")
+        # CSV 경로 탐색 — Streamlit Cloud는 cwd가 repo 루트이므로 파일명 직접 참조가 우선
+        # 로컬 실행 시에는 app.py 위치 기준으로 fallback
+        _fname = "전기요금누진제.csv"
+        _candidates = [
+            _fname,                                                              # Streamlit Cloud: cwd = repo 루트
+            os.path.join(os.path.dirname(os.path.abspath(__file__)), _fname),   # 로컬: app.py 옆
+            os.path.join(os.getcwd(), _fname),                                  # cwd 명시
+        ]
+        csv_path = next((p for p in _candidates if os.path.exists(p)), _fname)
+        df = read_safe(csv_path)
 
         # ── 기타계절 요금표 파싱 (row2~4) ──
         # col0=구간명, col1=기본요금, col2=단계명, col3=단가(원/kWh)
@@ -480,6 +489,7 @@ def calc_condensing_saving(tariff_csv, scale=1.0):
         "monthly_hp_won":      monthly_won,
         "monthly_hp_man":      [round(v / 10000, 2) for v in monthly_won],
         "hp_annual_man":       hp_ann_man,
+        "hp_annual_total_won": sum(monthly_won),        # 엑셀 합계 행에서 사용 (원 단위)
         "existing_annual_man": ex_ann_man,
         "saving_man":          save_man,
         "saving_ratio":        save_ratio,
