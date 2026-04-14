@@ -750,10 +750,16 @@ if st.session_state.analyzed:
 
         # 월별 Saving 차트
         months = list(range(1, 13))
-        # 기존 월별 난방비: HDD 비례 배분
-        hdd_base   = hdd_monthly["중부2"]
-        ann_ex     = saving_result["existing_annual_man"]
-        monthly_ex = [round(ann_ex * hdd_base[m-1] / sum(hdd_base), 2) for m in months]
+        # 기존 월별 난방비: 사용자 입력 w_heat(1월 기준)를 HDD 비례로 직접 배분
+        # 수식: 해당월 난방비 = w_heat × (해당월 HDD / 1월 HDD)
+        # → 1월은 항상 w_heat 그대로, 다른 달은 HDD 비율만큼 감소
+        # 이전 버그: existing_annual_man(CSV scale값)에서 배분 → 1월이 w_heat와 달라짐
+        hdd_base = hdd_monthly[zone]   # 사용자 선택 지역 기준
+        hdd_jan  = hdd_base[0]
+        monthly_ex = [
+            round(w_heat * hdd_base[m-1] / hdd_jan, 2) if hdd_jan > 0 else 0
+            for m in months
+        ]
 
         df_saving = pd.DataFrame({
             "월":            [f"{m}월" for m in months],
@@ -882,10 +888,12 @@ if st.session_state.analyzed:
             c = ws_s.cell(row=2, column=ci, value=h)
             c.fill = sf; c.font = fb; c.border = thin; c.alignment = center
 
-        hdd_base = hdd_monthly["중부2"]
+        hdd_base = hdd_monthly[zone]   # 사용자 지역 기준 (버그수정: 중부2 고정 → zone 사용)
+        hdd_jan_xl = hdd_base[0]
         for m in range(1, 13):
             r   = m + 2
-            ex  = round(saving_result["existing_annual_man"] * hdd_base[m-1] / sum(hdd_base), 2)
+            # w_heat(1월 입력값) 기준으로 HDD 비례 배분 (버그수정: CSV scale값 → w_heat 직접 사용)
+            ex  = round(w_heat * hdd_base[m-1] / hdd_jan_xl, 2) if hdd_jan_xl > 0 else 0
             hp  = saving_result["monthly_hp_man"][m-1]
             won = saving_result["monthly_hp_won"][m-1]
             sav = round(ex - hp, 2)
