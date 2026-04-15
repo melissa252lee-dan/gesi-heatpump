@@ -296,12 +296,30 @@ def load_simulation_data():
             for _, r in df_c.iloc[h_idx+1:].iterrows():
                 z = str(r[0]).strip()
                 if z in zones:
-                    try: cop_data[z] = {"scop": float(r[15])}
+                    try:
+                        scop = float(r[15])
+                        # 월별 COP (col2~13, 1~12월) — 난방 없는 달은 0
+                        monthly_cop = []
+                        for ci in range(2, 14):
+                            try:
+                                v = float(r[ci])
+                                monthly_cop.append(v if v > 0 else 0.0)
+                            except:
+                                monthly_cop.append(0.0)
+                        cop_data[z] = {"scop": scop, "monthly_cop": monthly_cop}
                     except: continue
 
-        fallback = {"중부1": 3.29, "중부2": 3.66, "남부": 3.99, "제주": 4.21}
-        for k, v in fallback.items():
-            if k not in cop_data: cop_data[k] = {"scop": v}
+        # fallback: monthly_cop는 sCOP 단일값으로 대체 (난방월만 채움)
+        fallback_scop  = {"중부1": 3.29, "중부2": 3.66, "남부": 3.99, "제주": 4.21}
+        fallback_mcop  = {
+            "중부1": [2.94, 3.10, 3.52, 0, 0, 0, 0, 0, 0, 4.10, 3.61, 3.07],
+            "중부2": [3.39, 3.57, 4.00, 0, 0, 0, 0, 0, 0, 0,    4.08, 3.55],
+            "남부":  [3.82, 3.95, 4.23, 0, 0, 0, 0, 0, 0, 0,    4.31, 3.96],
+            "제주":  [4.06, 4.13, 4.44, 0, 0, 0, 0, 0, 0, 0,    4.67, 4.25],
+        }
+        for k in ["중부1", "중부2", "남부", "제주"]:
+            if k not in cop_data:
+                cop_data[k] = {"scop": fallback_scop[k], "monthly_cop": fallback_mcop[k]}
         return temp_data, cop_data
     except:
         return None, None
@@ -542,23 +560,56 @@ dynamic_cop = 3.0
 st.markdown('<div class="section-title">📊 우리 동네 기후 및 히트펌프 효율 분석</div>', unsafe_allow_html=True)
 if df_temp and df_cop:
     dynamic_cop = df_cop[zone]["scop"]
-    all_t = []
-    days  = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]
-    for h in range(len(df_temp[zone])):
-        for m in range(12): all_t.extend([round(df_temp[zone][h][m])] * days[m])
-    counts = pd.Series(all_t).value_counts().sort_index().reset_index()
-    counts.columns = ["온도", "시간"]
+
+    # 월별 낮(06~18시) / 밤(19~05시) 평균기온 계산
+    # 외기온도 CSV: temp_data[zone] = 24(시간) × 12(월) 행렬
+    month_labels = ["1월","2월","3월","4월","5월","6월","7월","8월","9월","10월","11월","12월"]
+    day_avg, night_avg = [], []
+    for mi in range(12):
+        day_vals   = [df_temp[zone][h][mi] for h in range(len(df_temp[zone])) if 6 <= h <= 18]
+        night_vals = [df_temp[zone][h][mi] for h in range(len(df_temp[zone])) if h < 6 or h > 18]
+        day_avg.append(round(sum(day_vals)/len(day_vals), 1)   if day_vals   else 0.0)
+        night_avg.append(round(sum(night_vals)/len(night_vals), 1) if night_vals else 0.0)
+
+    df_temp_chart = pd.DataFrame({
+        "월":   month_labels * 2,
+        "기온":  day_avg + night_avg,
+        "구분": ["낮 (06~18시)"] * 12 + ["밤 (19~05시)"] * 12,
+    })
+    # 월 순서 고정
+    month_order = month_labels
+
     cl1, cl2 = st.columns([2, 1])
     with cl1:
-        chart = alt.Chart(counts).mark_bar(color="#3b82f6").encode(
-            x=alt.X("온도:Q", title="외기 온도 (°C)"),
-            y=alt.Y("시간:Q", title="연간 누적 시간 (hours)"),
-            tooltip=["온도", "시간"]
-        ).properties(height=230)
+        base = alt.Chart(df_temp_chart).encode(
+            x=alt.X("월:O", sort=month_order, title="월"),
+            color=alt.Color("구분:N", scale=alt.Scale(
+                domain=["낮 (06~18시)", "밤 (19~05시)"],
+                range=["#f97316", "#3b82f6"]
+            ), legend=alt.Legend(orient="top", title=None))
+        )
+        line_chart = base.mark_line(point=True, strokeWidth=2).encode(
+            y=alt.Y("기온:Q", title="평균기온 (°C)"),
+            tooltip=["월", "구분", alt.Tooltip("기온:Q", title="온도(°C)")]
+        )
+        zero_line = alt.Chart(pd.DataFrame({"y": [0]})).mark_rule(
+            color="gray", strokeDash=[4, 3], strokeWidth=1
+        ).encode(y="y:Q")
+        chart = (zero_line + line_chart).properties(
+            height=230, title=f"{s_reg} 월별 낮·밤 평균기온"
+        )
         st.altair_chart(chart, use_container_width=True)
+
     with cl2:
-        st.success(f"**✅ [{s_reg}] 맞춤 효율(sCOP)**\n# {dynamic_cop}")
-        st.caption("카르노 열펌프 공식 + 지역 기후 데이터 기반 연평균 효율")
+        # 겨울철 난방 COP: 11~3월 월평균 COP의 평균 (COP_계산기.csv 기반)
+        monthly_cop = df_cop[zone].get("monthly_cop", [])
+        heating_months_idx = [10, 11, 0, 1, 2]  # 11, 12, 1, 2, 3월
+        heating_cops = [monthly_cop[i] for i in heating_months_idx
+                        if i < len(monthly_cop) and monthly_cop[i] > 0]
+        winter_cop = round(sum(heating_cops) / len(heating_cops), 2) if heating_cops else dynamic_cop
+
+        st.success(f"**✅ [{s_reg}] 겨울철 난방 COP**\n# {winter_cop}")
+        st.caption("11~3월 평균 COP (카르노 공식 기반)")
 
 # ── 섹션 2: 에너지 소비 현황 ──
 st.markdown('<div class="section-title">2. 에너지 소비 현황</div>', unsafe_allow_html=True)
