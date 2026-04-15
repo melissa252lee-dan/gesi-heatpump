@@ -618,8 +618,22 @@ cv1, cv2 = st.columns(2)
 with cv1: w_heat = st.number_input("동절기(1월) 평균 난방비 (만원)", value=20)
 with cv2: w_elec = st.number_input("동절기(1월) 전기요금 (만원)", value=6)
 
+ce1, ce2 = st.columns(2)
+with ce1:
+    heating_type = st.selectbox(
+        "현재 주택의 난방 방식",
+        ["가스 콘덴싱 보일러", "가스 일반 보일러", "등유 보일러", "LPG 보일러"],
+        help="현재 사용 중인 난방 연료 방식을 선택해 주세요."
+    )
+with ce2:
+    cooking_type = st.selectbox(
+        "사용하는 취사 기기",
+        ["인덕션 (전기)", "도시가스", "LPG"],
+        help="현재 사용 중인 취사 기기를 선택해 주세요."
+    )
+
 # 입력값이 바뀌면 이전 분석 결과 초기화 → 반드시 버튼 다시 눌러야 최신값으로 재계산
-_input_key = (w_heat, w_elec, s_reg, h_type, h_size)
+_input_key = (w_heat, w_elec, s_reg, h_type, h_size, heating_type, cooking_type)
 if st.session_state.get("_last_input_key") != _input_key:
     st.session_state.analyzed = False
     st.session_state["_last_input_key"] = _input_key
@@ -755,16 +769,16 @@ if st.session_state.analyzed:
 
     saving_result = calc_condensing_saving(tariff_csv, scale=scale)
 
-    # ── ⑦ 15년 복리 시뮬레이션 ──
-    years, gas_cum, hp_cum, net_p = list(range(1, 16)), [], [], []
-    g_s, h_s, pb = 0.0, float(net_cap), "15년 초과"
+    # ── ⑦ 18년 복리 시뮬레이션 ──
+    years, gas_cum, hp_cum, net_p = list(range(1, 19)), [], [], []
+    g_s, h_s, pb = 0.0, float(net_cap), "18년 초과"
     for y in years:
         cg = ann_heat_base * ((1 + f_inf / 100) ** y) + ann_elec_base
         ch = ann_hp_net_op  * ((1 + e_inf / 100) ** y) + ann_elec_base
         g_s += cg; h_s += ch
         p = int(g_s - h_s)
         gas_cum.append(int(g_s)); hp_cum.append(int(h_s)); net_p.append(p)
-        if pb == "15년 초과" and p > 0: pb = f"{y}년차"
+        if pb == "18년 초과" and p > 0: pb = f"{y}년차"
 
     # ══════════════════════════════════════════════════════════
     # 결과 출력
@@ -773,23 +787,23 @@ if st.session_state.analyzed:
 
     # 평수에 따른 히트펌프 설치 공간 및 적정 용량
     if h_size < 20:
-        hp_space    = "소형 냉장고 크기 (595 × 625 mm)"
+        hp_space    = "소형 냉장고 크기"
         hp_capacity = "6 kW"
     elif h_size <= 28:
-        hp_space    = "워시타워 1대 공간 (800 × 1,115 mm)"
+        hp_space    = "워시타워 1대 크기"
         hp_capacity = "10 kW"
     elif h_size <= 35:
-        hp_space    = "워시타워 1대 공간 (800 × 1,115 mm)"
+        hp_space    = "워시타워 1대 크기"
         hp_capacity = "12 kW"
     else:
-        hp_space    = "보일러실 공간 (1,120 × 1,666 mm)"
+        hp_space    = "보일러실 크기"
         hp_capacity = "16 kW"
 
     ca, cb, cc, cd = st.columns(4)
     ca.metric("투자 회수 시점", pb)
-    cb.metric("15년 순이익", f"{net_p[-1]:,} 만원")
-    cc.metric(f"히트펌프 설치 공간 ({h_size}평 기준)", hp_space)
-    cd.metric(f"적정 히트펌프 용량 ({h_size}평 기준)", hp_capacity)
+    cb.metric("18년 순이익", f"{net_p[-1]:,} 만원")
+    cc.metric("히트펌프 설치 공간", hp_space)
+    cd.metric("적정 히트펌프 용량", hp_capacity)
 
     # ── [테스트 섹션] 도시가스 콘덴싱→HP 난방비 Saving ──
     if elec_tariff == "누진제_1종":
@@ -881,7 +895,7 @@ if st.session_state.analyzed:
         st.markdown(f"""
 | 항목 | 적용값 | 근거 |
 |------|--------|------|
-| 설비 CAPEX | **{capex}만원** | 에너지경제연구원 2025 / 정부 브리핑 |
+| 설비 CAPEX | **{capex}만원** | 국내 기업 자료 기반 (설치비 포함) |
 | HDD 난방 계수 | **×{hdd_ratio}** | COP_계산기.csv HDD ({zone}) |
 | 태양광 절감액 | **연 {pv_annual_saving:.1f}만원** | pv_monthly_data × {s_capa}kW |
 | HP 연간 운영비 | **{ann_hp_net_op:.1f}만원** | 난방비 ÷ sCOP({dynamic_cop}) - PV절감 |
@@ -889,10 +903,10 @@ if st.session_state.analyzed:
 | 요금 데이터 출처 | **{tariff_csv["source"]}** | 전기요금누진제.csv |
         """)
 
-    # ── 15년 차트 ──
+    # ── 18년 차트 ──
     g1, g2 = st.columns(2)
     with g1:
-        st.write("**15년 누적 비용 흐름**")
+        st.write("**18년 누적 비용 흐름**")
         df_a = pd.DataFrame({"연도": years, "기존": gas_cum, "HP": hp_cum}).melt(
             "연도", var_name="시나리오", value_name="비용")
         st.altair_chart(alt.Chart(df_a).mark_area(opacity=0.5).encode(
@@ -988,15 +1002,15 @@ if st.session_state.analyzed:
 
     # ③ 15년 재무 분석 시트
     sheet_num = "③" if elec_tariff == "누진제_1종" else "②"
-    ws3 = wb.create_sheet(f"{sheet_num}15년_재무_분석")
+    ws3 = wb.create_sheet(f"{sheet_num}18년_재무_분석")
     ws3.merge_cells("A1:H1")
-    ws3["A1"] = "15년 장기 투자 회수 및 누적 순이익 시뮬레이션"
+    ws3["A1"] = "18년 장기 투자 회수 및 누적 순이익 시뮬레이션"
     ws3["A1"].fill = hf; ws3["A1"].font = fw; ws3["A1"].alignment = center
     for ci, h in enumerate(["연도","물가지수(4%)","기존 OPEX(만)","HP OPEX(만)","연간 순이익(만)","누적 순이익(만)","ROI","상태"], 1):
         c = ws3.cell(row=2, column=ci, value=h)
         c.fill = sf; c.font = fb; c.border = thin; c.alignment = center
     ref_cap = f"'①입력_가정'!$B$12"
-    for y in range(1, 16):
+    for y in range(1, 19):
         r = y + 2
         ws3.cell(row=r, column=1, value=f"{y}년차").border = thin
         ws3.cell(row=r, column=2, value=f"=(1+0.04)^{y-1}").border = thin
