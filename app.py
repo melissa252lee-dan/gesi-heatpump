@@ -581,21 +581,21 @@ if df_temp and df_cop:
 
     cl1, cl2 = st.columns([2, 1])
     with cl1:
-        base = alt.Chart(df_temp_chart).encode(
+        # 낮(주황) · 밤(진한 남색) 나란히 배치하는 그룹형 막대그래프
+        bar_chart = alt.Chart(df_temp_chart).mark_bar().encode(
             x=alt.X("월:O", sort=month_order, title="월"),
+            y=alt.Y("기온:Q", title="평균기온 (°C)"),
             color=alt.Color("구분:N", scale=alt.Scale(
                 domain=["낮 (06~18시)", "밤 (19~05시)"],
-                range=["#f97316", "#3b82f6"]
-            ), legend=alt.Legend(orient="top", title=None))
-        )
-        line_chart = base.mark_line(point=True, strokeWidth=2).encode(
-            y=alt.Y("기온:Q", title="평균기온 (°C)"),
+                range=["#f97316", "#1e3a5f"]
+            ), legend=alt.Legend(orient="top", title=None)),
+            xOffset="구분:N",  # 같은 월 안에서 나란히 배치
             tooltip=["월", "구분", alt.Tooltip("기온:Q", title="온도(°C)")]
         )
         zero_line = alt.Chart(pd.DataFrame({"y": [0]})).mark_rule(
-            color="gray", strokeDash=[4, 3], strokeWidth=1
+            color="#94a3b8", strokeDash=[4, 3], strokeWidth=1
         ).encode(y="y:Q")
-        chart = (zero_line + line_chart).properties(
+        chart = (zero_line + bar_chart).properties(
             height=230, title=f"{s_reg} 월별 낮·밤 평균기온"
         )
         st.altair_chart(chart, use_container_width=True)
