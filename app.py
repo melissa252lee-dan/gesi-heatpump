@@ -420,20 +420,12 @@ def reverse_kwh_from_tariff(bill_man, month, tariff_data):
 
 def calc_capex(h_type, h_size):
     """
-    주거 형태와 면적을 기반으로 히트펌프 설치 총비용(CAPEX, 만원)을 추정합니다.
+    히트펌프 설치 총비용(CAPEX, 만원)을 추정합니다.
 
-    출처:
-    - 에너지경제연구원 「세계 히트펌프 시장 및 정책 동향과 국내 시사점」(2025)
-      → 공동주택 기준 850만원 (LCOH 분석 기준값)
-    - 기후에너지환경부 정책 브리핑 (2026.03)
-      → 본체 550~700만원, 급탕조 200~300만원, 공사 100만원
-
-    [아파트] = 850만원 고정
-    [단독·연립·빌라] = 975만원 + 3만원/평
+    출처: 국내 기업 자료 기반
+    - 설치비 포함 1,000만원 고정 적용
     """
-    if "아파트" in h_type:
-        return 850
-    return 975 + h_size * 3
+    return 1000
 
 
 def calc_hdd_ratio(zone):
@@ -779,11 +771,25 @@ if st.session_state.analyzed:
     # ══════════════════════════════════════════════════════════
     st.markdown('<div class="section-title">분석 결과 요약</div>', unsafe_allow_html=True)
 
+    # 평수에 따른 히트펌프 설치 공간 및 적정 용량
+    if h_size < 20:
+        hp_space    = "소형 냉장고 크기 (595 × 625 mm)"
+        hp_capacity = "6 kW"
+    elif h_size <= 28:
+        hp_space    = "워시타워 1대 공간 (800 × 1,115 mm)"
+        hp_capacity = "10 kW"
+    elif h_size <= 35:
+        hp_space    = "워시타워 1대 공간 (800 × 1,115 mm)"
+        hp_capacity = "12 kW"
+    else:
+        hp_space    = "보일러실 공간 (1,120 × 1,666 mm)"
+        hp_capacity = "16 kW"
+
     ca, cb, cc, cd = st.columns(4)
     ca.metric("투자 회수 시점", pb)
     cb.metric("15년 순이익", f"{net_p[-1]:,} 만원")
-    cc.metric("적용 sCOP", f"{dynamic_cop}")
-    cd.metric("HDD 난방 계수", f"×{hdd_ratio} ({zone})")
+    cc.metric(f"히트펌프 설치 공간 ({h_size}평 기준)", hp_space)
+    cd.metric(f"적정 히트펌프 용량 ({h_size}평 기준)", hp_capacity)
 
     # ── [테스트 섹션] 도시가스 콘덴싱→HP 난방비 Saving ──
     if elec_tariff == "누진제_1종":
@@ -927,7 +933,7 @@ if st.session_state.analyzed:
         ("역산 kWh",        cur_k,                      "kWh/월",  f"{'CSV 기반 기타계절 역산' if elec_tariff=='누진제_1종' else '하드코딩 역산'}"),
         ("지역 sCOP",       dynamic_cop,                "-",       f"카르노 공식+기후 데이터 ({zone})"),
         ("HDD 난방 계수",   hdd_ratio,                  "-",       f"COP_계산기.csv HDD ({zone})"),
-        ("설비 CAPEX",      capex,                      "만원",    "에너지경제연구원2025/정부브리핑"),
+        ("설비 CAPEX",      capex,                      "만원",    "국내 기업 자료 기반 (설치비 포함)"),
         ("정부보조금",      560,                        "만원",    "기후에너지환경부 2026 보급 사업"),
         ("지방보조금",      280,                        "만원",    "정부보조금 50% 매칭 (제주·경남·전남)"),
         ("순 투자비",       net_cap,                    "만원",    "=CAPEX-정부보조금-지방보조금"),
