@@ -543,15 +543,7 @@ with c1: s_reg  = st.selectbox("광역 지자체", list(regions_full.keys()), in
 with c2: s_sub  = st.selectbox("기초 지자체", regions_full.get(s_reg, ["전체"]))
 c3, c4 = st.columns(2)
 with c3: h_type = st.selectbox("주거 형태", ["단독 주택 / 다가구 주택", "아파트", "연립 / 빌라 / 다세대 주택"])
-with c4:
-    h_size = st.number_input("전용 면적 (평)", min_value=10, value=30)
-    if h_size < 20:
-        _size_label = "📦 소형 냉장고 크기 (595 × 625 mm)"
-    elif h_size <= 34:
-        _size_label = "🫧 워시타워 1대 설치 공간 (800 × 1,115 mm)"
-    else:
-        _size_label = "🏠 단독주택 보일러실 공간 (1,120 × 1,666 mm)"
-    st.markdown(f"<div style='font-size:0.78rem; color:#64748b; margin-top:-8px;'>설치 공간 기준: {_size_label}</div>", unsafe_allow_html=True)
+with c4: h_size = st.number_input("전용 면적 (평)", min_value=10, value=30)
 
 zone        = map_region_to_zone(s_reg)
 dynamic_cop = 3.0
