@@ -796,21 +796,26 @@ if st.session_state.analyzed:
     # 평수에 따른 히트펌프 설치 공간 및 적정 용량
     if h_size < 20:
         hp_space    = "소형 냉장고 크기"
+        hp_space_mm = "595 × 625 mm"
         hp_capacity = "6 kW"
     elif h_size <= 28:
         hp_space    = "워시타워 1대 크기"
+        hp_space_mm = "800 × 1,115 mm"
         hp_capacity = "10 kW"
     elif h_size <= 35:
         hp_space    = "워시타워 1대 크기"
+        hp_space_mm = "800 × 1,115 mm"
         hp_capacity = "12 kW"
     else:
         hp_space    = "보일러실 크기"
+        hp_space_mm = "1,120 × 1,666 mm"
         hp_capacity = "16 kW"
 
     ca, cb, cc, cd = st.columns(4)
     ca.metric("투자 회수 시점", pb)
     cb.metric("18년 순이익", f"{net_p[-1]:,} 만원")
     cc.metric("히트펌프 설치 공간", hp_space)
+    cc.markdown(f"<div style='font-size:0.78rem; color:#64748b; margin-top:-10px;'>{hp_space_mm}</div>", unsafe_allow_html=True)
     cd.metric("적정 히트펌프 용량", hp_capacity)
 
     # ── [테스트 섹션] 도시가스 콘덴싱→HP 난방비 Saving ──
