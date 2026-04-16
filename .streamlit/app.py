@@ -420,20 +420,12 @@ def reverse_kwh_from_tariff(bill_man, month, tariff_data):
 
 def calc_capex(h_type, h_size):
     """
-    주거 형태와 면적을 기반으로 히트펌프 설치 총비용(CAPEX, 만원)을 추정합니다.
+    히트펌프 설치 총비용(CAPEX, 만원)을 추정합니다.
 
-    출처:
-    - 에너지경제연구원 「세계 히트펌프 시장 및 정책 동향과 국내 시사점」(2025)
-      → 공동주택 기준 850만원 (LCOH 분석 기준값)
-    - 기후에너지환경부 정책 브리핑 (2026.03)
-      → 본체 550~700만원, 급탕조 200~300만원, 공사 100만원
-
-    [아파트] = 850만원 고정
-    [단독·연립·빌라] = 975만원 + 3만원/평
+    출처: 국내 기업 자료 기반
+    - 설치비 포함 1,000만원 고정 적용
     """
-    if "아파트" in h_type:
-        return 850
-    return 975 + h_size * 3
+    return 1000
 
 
 def calc_hdd_ratio(zone):
@@ -551,7 +543,14 @@ with c1: s_reg  = st.selectbox("광역 지자체", list(regions_full.keys()), in
 with c2: s_sub  = st.selectbox("기초 지자체", regions_full.get(s_reg, ["전체"]))
 c3, c4 = st.columns(2)
 with c3: h_type = st.selectbox("주거 형태", ["단독 주택 / 다가구 주택", "아파트", "연립 / 빌라 / 다세대 주택"])
-with c4: h_size = st.number_input("전용 면적 (평)", min_value=10, value=30)
+with c4:
+    h_size = st.number_input("전용 면적 (평)", min_value=10, value=30)
+    if h_size < 20:
+        st.caption("📦 설치 공간 기준: 소형 냉장고 크기 (595 × 625 mm)")
+    elif h_size <= 34:
+        st.caption("🫧 설치 공간 기준: 워시타워 1대 설치 공간 (800 × 1,115 mm)")
+    else:
+        st.caption("🏠 설치 공간 기준: 단독주택 보일러실 공간 (1,120 × 1,666 mm)")
 
 zone        = map_region_to_zone(s_reg)
 dynamic_cop = 3.0
@@ -581,50 +580,44 @@ if df_temp and df_cop:
 
     cl1, cl2 = st.columns([2, 1])
     with cl1:
-        base = alt.Chart(df_temp_chart).encode(
+        # 낮(주황) · 밤(진한 남색) 나란히 배치하는 그룹형 막대그래프
+        # Y축: 실제 데이터 범위보다 여유 있게 설정, 5°C 간격 눈금
+        all_temps = day_avg + night_avg
+        y_min = int(min(all_temps)) - 3
+        y_max = int(max(all_temps)) + 3
+
+        bar_chart = alt.Chart(df_temp_chart).mark_bar().encode(
             x=alt.X("월:O", sort=month_order, title="월"),
+            y=alt.Y("기온:Q", title="평균기온 (°C)",
+                    scale=alt.Scale(domain=[y_min, y_max]),
+                    axis=alt.Axis(tickCount=int((y_max - y_min) / 5) + 1,
+                                  values=list(range(y_min - (y_min % 5), y_max + 5, 5)),
+                                  format="d")),
             color=alt.Color("구분:N", scale=alt.Scale(
                 domain=["낮 (06~18시)", "밤 (19~05시)"],
-                range=["#f97316", "#3b82f6"]
-            ), legend=alt.Legend(orient="top", title=None))
-        )
-        line_chart = base.mark_line(point=True, strokeWidth=2).encode(
-            y=alt.Y("기온:Q", title="평균기온 (°C)"),
+                range=["#f97316", "#1e3a5f"]
+            ), legend=alt.Legend(orient="top", title=None)),
+            xOffset="구분:N",
             tooltip=["월", "구분", alt.Tooltip("기온:Q", title="온도(°C)")]
         )
         zero_line = alt.Chart(pd.DataFrame({"y": [0]})).mark_rule(
-            color="gray", strokeDash=[4, 3], strokeWidth=1
+            color="#94a3b8", strokeDash=[4, 3], strokeWidth=1
         ).encode(y="y:Q")
-        chart = (zero_line + line_chart).properties(
-            height=230, title=f"{s_reg} 월별 낮·밤 평균기온"
+        chart = (zero_line + bar_chart).properties(
+            height=260, title=f"{s_reg} 월별 낮·밤 평균기온"
         )
         st.altair_chart(chart, use_container_width=True)
 
     with cl2:
-        # 겨울철 난방 COP: 11~3월 평균 (HDD>0인 달만)
+        # 겨울철 난방 COP: 11~3월 월평균 COP의 평균 (COP_계산기.csv 기반)
         monthly_cop = df_cop[zone].get("monthly_cop", [])
-        heating_months_idx = [10, 11, 0, 1, 2]  # 11,12,1,2,3월
+        heating_months_idx = [10, 11, 0, 1, 2]  # 11, 12, 1, 2, 3월
         heating_cops = [monthly_cop[i] for i in heating_months_idx
                         if i < len(monthly_cop) and monthly_cop[i] > 0]
         winter_cop = round(sum(heating_cops) / len(heating_cops), 2) if heating_cops else dynamic_cop
 
-        st.metric(
-            label=f"겨울철 난방 COP ({s_reg})",
-            value=f"{winter_cop}",
-            help="11~3월 월평균 COP의 산술평균 (카르노 공식 기반, HDD>0인 달만 포함)"
-        )
-        st.caption("11~3월 평균 COP")
-
-        # 월별 COP 미니 테이블
-        if monthly_cop:
-            cop_display = []
-            for i, lbl in enumerate(month_labels):
-                v = monthly_cop[i] if i < len(monthly_cop) else 0
-                cop_display.append({"월": lbl, "난방 COP": v if v > 0 else "-"})
-            df_cop_show = pd.DataFrame(cop_display)
-            df_cop_show = df_cop_show[df_cop_show["난방 COP"] != "-"]  # 난방월만
-            st.dataframe(df_cop_show, hide_index=True, use_container_width=True,
-                         height=min(35 * len(df_cop_show) + 38, 280))
+        st.success(f"**✅ [{s_reg}] 겨울철 난방 COP**\n# {winter_cop}")
+        st.caption("11~3월 평균 COP (카르노 공식 기반)")
 
 # ── 섹션 2: 에너지 소비 현황 ──
 st.markdown('<div class="section-title">2. 에너지 소비 현황</div>', unsafe_allow_html=True)
@@ -632,8 +625,22 @@ cv1, cv2 = st.columns(2)
 with cv1: w_heat = st.number_input("동절기(1월) 평균 난방비 (만원)", value=20)
 with cv2: w_elec = st.number_input("동절기(1월) 전기요금 (만원)", value=6)
 
+ce1, ce2 = st.columns(2)
+with ce1:
+    heating_type = st.selectbox(
+        "현재 주택의 난방 방식",
+        ["가스 콘덴싱 보일러", "가스 일반 보일러", "등유 보일러", "LPG 보일러"],
+        help="현재 사용 중인 난방 연료 방식을 선택해 주세요."
+    )
+with ce2:
+    cooking_type = st.selectbox(
+        "사용하는 취사 기기",
+        ["인덕션 (전기)", "도시가스", "LPG"],
+        help="현재 사용 중인 취사 기기를 선택해 주세요."
+    )
+
 # 입력값이 바뀌면 이전 분석 결과 초기화 → 반드시 버튼 다시 눌러야 최신값으로 재계산
-_input_key = (w_heat, w_elec, s_reg, h_type, h_size)
+_input_key = (w_heat, w_elec, s_reg, h_type, h_size, heating_type, cooking_type)
 if st.session_state.get("_last_input_key") != _input_key:
     st.session_state.analyzed = False
     st.session_state["_last_input_key"] = _input_key
@@ -769,27 +776,41 @@ if st.session_state.analyzed:
 
     saving_result = calc_condensing_saving(tariff_csv, scale=scale)
 
-    # ── ⑦ 15년 복리 시뮬레이션 ──
-    years, gas_cum, hp_cum, net_p = list(range(1, 16)), [], [], []
-    g_s, h_s, pb = 0.0, float(net_cap), "15년 초과"
+    # ── ⑦ 18년 복리 시뮬레이션 ──
+    years, gas_cum, hp_cum, net_p = list(range(1, 19)), [], [], []
+    g_s, h_s, pb = 0.0, float(net_cap), "18년 초과"
     for y in years:
         cg = ann_heat_base * ((1 + f_inf / 100) ** y) + ann_elec_base
         ch = ann_hp_net_op  * ((1 + e_inf / 100) ** y) + ann_elec_base
         g_s += cg; h_s += ch
         p = int(g_s - h_s)
         gas_cum.append(int(g_s)); hp_cum.append(int(h_s)); net_p.append(p)
-        if pb == "15년 초과" and p > 0: pb = f"{y}년차"
+        if pb == "18년 초과" and p > 0: pb = f"{y}년차"
 
     # ══════════════════════════════════════════════════════════
     # 결과 출력
     # ══════════════════════════════════════════════════════════
     st.markdown('<div class="section-title">분석 결과 요약</div>', unsafe_allow_html=True)
 
+    # 평수에 따른 히트펌프 설치 공간 및 적정 용량
+    if h_size < 20:
+        hp_space    = "소형 냉장고 크기"
+        hp_capacity = "6 kW"
+    elif h_size <= 28:
+        hp_space    = "워시타워 1대 크기"
+        hp_capacity = "10 kW"
+    elif h_size <= 35:
+        hp_space    = "워시타워 1대 크기"
+        hp_capacity = "12 kW"
+    else:
+        hp_space    = "보일러실 크기"
+        hp_capacity = "16 kW"
+
     ca, cb, cc, cd = st.columns(4)
     ca.metric("투자 회수 시점", pb)
-    cb.metric("15년 순이익", f"{net_p[-1]:,} 만원")
-    cc.metric("적용 sCOP", f"{dynamic_cop}")
-    cd.metric("HDD 난방 계수", f"×{hdd_ratio} ({zone})")
+    cb.metric("18년 순이익", f"{net_p[-1]:,} 만원")
+    cc.metric("히트펌프 설치 공간", hp_space)
+    cd.metric("적정 히트펌프 용량", hp_capacity)
 
     # ── [테스트 섹션] 도시가스 콘덴싱→HP 난방비 Saving ──
     if elec_tariff == "누진제_1종":
@@ -881,7 +902,7 @@ if st.session_state.analyzed:
         st.markdown(f"""
 | 항목 | 적용값 | 근거 |
 |------|--------|------|
-| 설비 CAPEX | **{capex}만원** | 에너지경제연구원 2025 / 정부 브리핑 |
+| 설비 CAPEX | **{capex}만원** | 국내 기업 자료 기반 (설치비 포함) |
 | HDD 난방 계수 | **×{hdd_ratio}** | COP_계산기.csv HDD ({zone}) |
 | 태양광 절감액 | **연 {pv_annual_saving:.1f}만원** | pv_monthly_data × {s_capa}kW |
 | HP 연간 운영비 | **{ann_hp_net_op:.1f}만원** | 난방비 ÷ sCOP({dynamic_cop}) - PV절감 |
@@ -889,10 +910,10 @@ if st.session_state.analyzed:
 | 요금 데이터 출처 | **{tariff_csv["source"]}** | 전기요금누진제.csv |
         """)
 
-    # ── 15년 차트 ──
+    # ── 18년 차트 ──
     g1, g2 = st.columns(2)
     with g1:
-        st.write("**15년 누적 비용 흐름**")
+        st.write("**18년 누적 비용 흐름**")
         df_a = pd.DataFrame({"연도": years, "기존": gas_cum, "HP": hp_cum}).melt(
             "연도", var_name="시나리오", value_name="비용")
         st.altair_chart(alt.Chart(df_a).mark_area(opacity=0.5).encode(
@@ -933,7 +954,7 @@ if st.session_state.analyzed:
         ("역산 kWh",        cur_k,                      "kWh/월",  f"{'CSV 기반 기타계절 역산' if elec_tariff=='누진제_1종' else '하드코딩 역산'}"),
         ("지역 sCOP",       dynamic_cop,                "-",       f"카르노 공식+기후 데이터 ({zone})"),
         ("HDD 난방 계수",   hdd_ratio,                  "-",       f"COP_계산기.csv HDD ({zone})"),
-        ("설비 CAPEX",      capex,                      "만원",    "에너지경제연구원2025/정부브리핑"),
+        ("설비 CAPEX",      capex,                      "만원",    "국내 기업 자료 기반 (설치비 포함)"),
         ("정부보조금",      560,                        "만원",    "기후에너지환경부 2026 보급 사업"),
         ("지방보조금",      280,                        "만원",    "정부보조금 50% 매칭 (제주·경남·전남)"),
         ("순 투자비",       net_cap,                    "만원",    "=CAPEX-정부보조금-지방보조금"),
@@ -988,15 +1009,15 @@ if st.session_state.analyzed:
 
     # ③ 15년 재무 분석 시트
     sheet_num = "③" if elec_tariff == "누진제_1종" else "②"
-    ws3 = wb.create_sheet(f"{sheet_num}15년_재무_분석")
+    ws3 = wb.create_sheet(f"{sheet_num}18년_재무_분석")
     ws3.merge_cells("A1:H1")
-    ws3["A1"] = "15년 장기 투자 회수 및 누적 순이익 시뮬레이션"
+    ws3["A1"] = "18년 장기 투자 회수 및 누적 순이익 시뮬레이션"
     ws3["A1"].fill = hf; ws3["A1"].font = fw; ws3["A1"].alignment = center
     for ci, h in enumerate(["연도","물가지수(4%)","기존 OPEX(만)","HP OPEX(만)","연간 순이익(만)","누적 순이익(만)","ROI","상태"], 1):
         c = ws3.cell(row=2, column=ci, value=h)
         c.fill = sf; c.font = fb; c.border = thin; c.alignment = center
     ref_cap = f"'①입력_가정'!$B$12"
-    for y in range(1, 16):
+    for y in range(1, 19):
         r = y + 2
         ws3.cell(row=r, column=1, value=f"{y}년차").border = thin
         ws3.cell(row=r, column=2, value=f"=(1+0.04)^{y-1}").border = thin
