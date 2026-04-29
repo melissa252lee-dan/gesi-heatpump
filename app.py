@@ -160,6 +160,17 @@ CO2_PER_MAN_ELEC = 17.0
 TREE_KG_PER_YEAR = 6.6
 CAR_KG_PER_KM    = 0.15
 
+# ── Sheet2 (kWh 기반 물리 데이터) 행 매핑 ──
+# 표준 가구(중부2, 거창군 32평, 연 65만원) 기준의 월별 에너지 흐름.
+# 행 45-48: 월별 난방 에너지 수요(kWh) — 가스/등유/LPG 기존 보일러 사용 시
+# 행 53-56: 월별 HP 전력 사용량(kWh) — HP로 전환했을 때 (= 난방수요 ÷ 월별 COP)
+SHEET2_DEMAND_ROWS = {
+    "도시가스(콘덴싱)": 45, "도시가스(일반)": 46, "등유": 47, "LPG": 48,
+}
+SHEET2_HP_KWH_ROWS = {
+    "도시가스(콘덴싱)": 53, "도시가스(일반)": 54, "등유": 55, "LPG": 56,
+}
+
 # ── 엑셀 표준 가구 연 난방비(원) — 모든 블록 동일 ──
 EXCEL_BASE_ANNUAL_WON = 650516
 
@@ -184,16 +195,14 @@ def load_tariff_xlsx():
 
     [COP_계산기 시트 — 4개 기후존]
     각 존 3행씩: 월평균기온 / 월 HDD(Tbase=18°C) / 월 COP(난방시간 가중)
-    - 중부1: row 12~14, 중부2: row 16~18, 남부: row 20~22, 제주: row 24~26
-    - sCOP(HDD가중)는 각 존의 첫 행 col 16
+    sCOP(HDD가중)는 각 존의 첫 행 col 16
+
+    [Sheet2 — 표준 가구의 물리적 에너지 흐름 (kWh)]
+    행 45-48: 월별 난방 에너지 수요(연료별, 보일러 사용 시)
+    행 53-56: 월별 HP 전력 사용량(연료→HP 전환 후, = 난방수요 ÷ COP)
 
     Returns:
         (data, error_msg) — 성공 시 (dict, None), 실패 시 (None, str)
-        data["blocks"]:    20개 요금 블록
-        data["scop"]:      {zone: sCOP}
-        data["hdd"]:       {zone: [12개월 HDD]}
-        data["monthly_cop"]: {zone: [12개월 COP]}
-        data["monthly_temp"]: {zone: [12개월 평균기온]}
     """
     fname = "전기요금완료본.xlsx"
     candidates = [
@@ -236,12 +245,21 @@ def load_tariff_xlsx():
             hdd[zone]          = [float(ws_cop.cell(row=r_hdd,  column=3+m).value or 0) for m in range(12)]
             monthly_cop[zone]  = [float(ws_cop.cell(row=r_cop,  column=3+m).value or 0) for m in range(12)]
 
+        # ── Sheet2 — 연료별 월별 난방 에너지 수요 / HP 전력 사용량 (kWh) ──
+        ws_s2 = wb["Sheet2"]
+        kwh_demand = {fuel: [float(ws_s2.cell(row=r, column=3+m).value or 0) for m in range(12)]
+                      for fuel, r in SHEET2_DEMAND_ROWS.items()}
+        kwh_hp     = {fuel: [float(ws_s2.cell(row=r, column=3+m).value or 0) for m in range(12)]
+                      for fuel, r in SHEET2_HP_KWH_ROWS.items()}
+
         return {
             "blocks":       blocks,
             "scop":         scop,
             "hdd":          hdd,
             "monthly_cop":  monthly_cop,
             "monthly_temp": monthly_temp,
+            "kwh_demand":   kwh_demand,
+            "kwh_hp":       kwh_hp,
         }, None
     except Exception as e:
         return None, str(e)
@@ -345,6 +363,32 @@ def calc_annual_co2_savings(ex_annual_man, hp_annual_man, fuel_key):
     trees  = round(co2_saving / TREE_KG_PER_YEAR)
     car_km = round(co2_saving / CAR_KG_PER_KM)
     return co2_saving, trees, car_km
+
+
+def calc_kwh_data(kwh_demand_fuel, kwh_hp_fuel, scale):
+    """Sheet2 기반 월별 에너지 사용량(kWh) 계산.
+
+    표준 가구의 kWh × 사용자 가구 scale 적용.
+
+    Args:
+        kwh_demand_fuel: 표준 가구의 월별 난방 에너지 수요(kWh) — 12개월
+        kwh_hp_fuel:     표준 가구의 월별 HP 전력 사용량(kWh) — 12개월
+        scale:           사용자 가구 규모 보정 계수
+
+    Returns: dict — 월별/연간 kWh 및 효율 비율
+    """
+    monthly_demand = [round(v * scale, 1) for v in kwh_demand_fuel]
+    monthly_hp     = [round(v * scale, 1) for v in kwh_hp_fuel]
+    annual_demand  = round(sum(monthly_demand), 0)
+    annual_hp      = round(sum(monthly_hp), 0)
+    efficiency     = round(annual_demand / annual_hp, 1) if annual_hp > 0 else 0.0
+    return {
+        "monthly_demand": monthly_demand,
+        "monthly_hp":     monthly_hp,
+        "annual_demand":  annual_demand,
+        "annual_hp":      annual_hp,
+        "efficiency":     efficiency,   # 기존 / HP — "X배 효율"
+    }
 
 
 def simulate_18yr(net_capex_man, ann_heat_man, ann_hp_man, fuel_inflation_pct, elec_inflation_pct):
@@ -538,6 +582,8 @@ if excel_data:
     HDD_MONTHLY   = excel_data["hdd"]           # 동적 로드된 HDD (Tbase=18°C)
     MONTHLY_COP   = excel_data["monthly_cop"]   # 월별 COP (참고용)
     MONTHLY_TEMP  = excel_data["monthly_temp"]  # 월평균 기온 (참고용)
+    KWH_DEMAND    = excel_data["kwh_demand"]    # Sheet2: 연료별 월별 난방 수요 (kWh)
+    KWH_HP        = excel_data["kwh_hp"]        # Sheet2: 연료별 월별 HP 전력 사용량 (kWh)
 
 col_title, col_logo = st.columns([6, 1])
 with col_title:
@@ -723,6 +769,9 @@ if st.session_state.analyzed:
         result["ex_annual_man"], result["hp_annual_man"], fuel_key
     )
 
+    # 에너지 사용량 (kWh) — Sheet2 기반 (사용자 가구 규모로 보정)
+    kwh = calc_kwh_data(KWH_DEMAND[fuel_key], KWH_HP[fuel_key], scale)
+
     # ─── 8-2. 결과 요약 헤더 ──────────────────────────────────────────
     st.markdown('<div class="section-title">📊 분석 결과 요약</div>', unsafe_allow_html=True)
 
@@ -790,6 +839,20 @@ if st.session_state.analyzed:
 </div>
 """, unsafe_allow_html=True)
 
+    # ─── 8-4-2. 에너지 효율 비교 박스 (Sheet2 kWh 기반) ───────────────
+    fuel_unit_label = "도시가스" if "도시가스" in fuel_key else fuel_key
+    st.markdown(f"""
+<div class='saving-box' style='background:#eff6ff; border-color:#93c5fd;'>
+  <p class='saving-title' style='color:#1e40af;'>⚡ 우리 가족의 1년 에너지 사용량</p>
+  <p class='saving-sub' style='color:#1e3a8a;'>
+    기존 보일러로는 연간 <b>{kwh['annual_demand']:,.0f} kWh</b>의 {fuel_unit_label} 에너지가 필요해요.
+    <br>
+    히트펌프로 바꾸면 같은 따뜻함을 만드는 데 <b>전기 {kwh['annual_hp']:,.0f} kWh</b>면 충분합니다 —
+    🔥 <b>약 {kwh['efficiency']}배 효율</b>로 같은 난방을 1/{kwh['efficiency']:.0f} 에너지로!
+  </p>
+</div>
+""", unsafe_allow_html=True)
+
     # ─── 8-5. 월별 차트 ──────────────────────────────────────────────
     df_chart = pd.DataFrame({
         "월":               [f"{m}월" for m in months],
@@ -819,6 +882,7 @@ if st.session_state.analyzed:
             "절감률":            monthly_stats["pct"],
             "누적 절감액(만원)": monthly_stats["cumulative"],
             "CO₂ 절감(kg)":     monthly_stats["co2"],
+            "HP 전력 사용(kWh)": kwh["monthly_hp"],
         })
         st.dataframe(df_detail, use_container_width=True, hide_index=True)
         st.caption(
@@ -829,6 +893,10 @@ if st.session_state.analyzed:
             "🌡️ **여름철(4~10월)에 비용이 보이는 이유**: 히트펌프는 난방뿐 아니라 **온수와 냉방까지 통합 운영**하는 기기입니다. "
             "기존 가스 보일러 가구도 여름엔 온수용 가스를 사용하지만, 입력하신 '1월 난방비'를 기준으로 HDD 비율로 분배할 때 "
             "비난방월은 0원으로 잡히는 구조라 음수 절감액이 표시될 수 있습니다 — **실제로 손해를 보는 것은 아니며, 연간 합계는 정확합니다**."
+        )
+        st.caption(
+            f"⚡ **HP 전력 사용(kWh)**은 누진제 사용자가 자기 누진 구간을 예측하는 데 도움이 됩니다 "
+            f"(예: 1월 {kwh['monthly_hp'][0]:.0f} kWh 사용 → 전체 가전과 합쳐 누진 단계 추정 가능)."
         )
         st.caption(
             f"📊 CO₂는 환경부 GIR 배출계수와 평균 단가({fuel_key}: {CO2_PER_MAN_FUEL[fuel_key]}kg/만원, "
