@@ -105,16 +105,8 @@ REGIONS_FULL = {
     "경상남도": ["창원시","진주시","통영시","사천시","김해시","밀양시","거제시","양산시","의령군","함안군","창녕군","고성군","남해군","하동군","산청군","함양군","거창군","합천군"],
 }
 
-# ── 월별 HDD(난방도일), Tbase=15°C, 지역별 대표값 ──
-HDD_MONTHLY = {
-    "중부1": [750, 596, 456, 198, 0, 0, 0, 0, 0, 161, 405, 676],  # 강원
-    "중부2": [521, 398, 264,  54, 0, 0, 0, 0, 0,   0, 225, 450],  # 서울/경기/충청 등
-    "남부":  [347, 269, 171,   0, 0, 0, 0, 0, 0,   0, 114, 295],  # 부산·대구·광주·울산·경남·전남
-    "제주":  [273, 224, 140,   0, 0, 0, 0, 0, 0,   0,  45, 211],  # 제주
-}
-
-# ── 기후 존별 sCOP (참고용 표시) ──
-SCOP_BY_ZONE = {"중부1": 3.29, "중부2": 3.66, "남부": 3.99, "제주": 4.21}
+# ── HDD(난방도일) 및 기후존별 sCOP는 엑셀의 'COP_계산기' 시트에서 동적 로드됩니다. ──
+# Tbase=18°C 기준, 각 지역 월별 데이터는 load_tariff_xlsx()를 통해 가져옵니다.
 
 # ── 엑셀 블록 헤더 위치 ──
 # (요금제, 태양광플래그, 난방유형) → 헤더 행 번호
@@ -183,14 +175,25 @@ SOUTHERN_REGIONS = {"제주도", "경상남도", "전라남도"}
 
 @st.cache_data
 def load_tariff_xlsx():
-    """전기요금완료본.xlsx에서 20개 블록 데이터를 로드.
+    """전기요금완료본.xlsx에서 모든 기준 데이터를 로드.
 
+    [전기요금 시트 — 20개 블록]
     각 블록 = (요금제, 태양광유무, 난방유형) 조합.
     블록 헤더 행: col 19=HP 연합계(원), col 20=기존난방비 연합계(원), col 21=Saving 비율
     헤더+1 ~ 헤더+12 행: 1~12월별 청구 내역 (col 9~18)
 
+    [COP_계산기 시트 — 4개 기후존]
+    각 존 3행씩: 월평균기온 / 월 HDD(Tbase=18°C) / 월 COP(난방시간 가중)
+    - 중부1: row 12~14, 중부2: row 16~18, 남부: row 20~22, 제주: row 24~26
+    - sCOP(HDD가중)는 각 존의 첫 행 col 16
+
     Returns:
-        (blocks, error_msg) — 성공 시 (dict, None), 실패 시 (None, str)
+        (data, error_msg) — 성공 시 (dict, None), 실패 시 (None, str)
+        data["blocks"]:    20개 요금 블록
+        data["scop"]:      {zone: sCOP}
+        data["hdd"]:       {zone: [12개월 HDD]}
+        data["monthly_cop"]: {zone: [12개월 COP]}
+        data["monthly_temp"]: {zone: [12개월 평균기온]}
     """
     fname = "전기요금완료본.xlsx"
     candidates = [
@@ -204,6 +207,8 @@ def load_tariff_xlsx():
 
     try:
         wb = load_workbook(fp, data_only=True)
+
+        # ── 전기요금 시트 — 20개 블록 ──
         ws = wb["전기요금"]
         blocks = {}
         for key, hr in EXCEL_BLOCK_HEADERS.items():
@@ -219,7 +224,25 @@ def load_tariff_xlsx():
                     for m in range(12)
                 ],
             }
-        return blocks, None
+
+        # ── COP_계산기 시트 — 기후존별 sCOP / HDD / 월별 COP / 월평균기온 ──
+        ws_cop = wb["COP_계산기"]
+        zone_rows = {"중부1": 12, "중부2": 16, "남부": 20, "제주": 24}
+        scop, hdd, monthly_cop, monthly_temp = {}, {}, {}, {}
+        for zone, r_temp in zone_rows.items():
+            r_hdd, r_cop = r_temp + 1, r_temp + 2
+            scop[zone] = float(ws_cop.cell(row=r_temp, column=16).value or 0)
+            monthly_temp[zone] = [float(ws_cop.cell(row=r_temp, column=3+m).value or 0) for m in range(12)]
+            hdd[zone]          = [float(ws_cop.cell(row=r_hdd,  column=3+m).value or 0) for m in range(12)]
+            monthly_cop[zone]  = [float(ws_cop.cell(row=r_cop,  column=3+m).value or 0) for m in range(12)]
+
+        return {
+            "blocks":       blocks,
+            "scop":         scop,
+            "hdd":          hdd,
+            "monthly_cop":  monthly_cop,
+            "monthly_temp": monthly_temp,
+        }, None
     except Exception as e:
         return None, str(e)
 
@@ -246,14 +269,16 @@ def get_block_key(tariff_label, heating_ui):
     return (tariff, solar, heating), tariff, solar
 
 
-def calc_csv_jan_heat_man(zone):
+def calc_csv_jan_heat_man(hdd_zone):
     """엑셀 표준 가구의 1월 난방비(만원) 추정.
 
     표준 연간 난방비(650,516원)를 사용자 지역의 HDD 비율로 안분.
+
+    Args:
+        hdd_zone: 해당 기후존의 12개월 HDD 리스트
     """
-    hdd = HDD_MONTHLY[zone]
-    if sum(hdd) == 0: return 0
-    return EXCEL_BASE_ANNUAL_WON * hdd[0] / sum(hdd) / 10000
+    if sum(hdd_zone) == 0: return 0
+    return EXCEL_BASE_ANNUAL_WON * hdd_zone[0] / sum(hdd_zone) / 10000
 
 
 def apply_block_with_scale(block, scale):
@@ -506,7 +531,13 @@ def build_excel_report(*, region, tariff_label, fuel_key,
 # 6. UI — 헤더 및 솔루션 개요
 # ══════════════════════════════════════════════════════════════════════
 
-tariff_blocks, load_err = load_tariff_xlsx()
+excel_data, load_err = load_tariff_xlsx()
+if excel_data:
+    tariff_blocks = excel_data["blocks"]
+    SCOP_BY_ZONE  = excel_data["scop"]          # 동적 로드된 sCOP
+    HDD_MONTHLY   = excel_data["hdd"]           # 동적 로드된 HDD (Tbase=18°C)
+    MONTHLY_COP   = excel_data["monthly_cop"]   # 월별 COP (참고용)
+    MONTHLY_TEMP  = excel_data["monthly_temp"]  # 월평균 기온 (참고용)
 
 col_title, col_logo = st.columns([6, 1])
 with col_title:
@@ -664,7 +695,7 @@ if st.session_state.analyzed:
     fuel_key = HEATING_TYPE_MAP[heating_type]   # 이후 모든 곳에서 재사용
 
     # 가구 규모 보정
-    csv_jan_man = calc_csv_jan_heat_man(zone)
+    csv_jan_man = calc_csv_jan_heat_man(HDD_MONTHLY[zone])
     scale       = (winter_heat_man / csv_jan_man) if csv_jan_man > 0 else 1.0
     result      = apply_block_with_scale(block, scale)
 
