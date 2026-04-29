@@ -412,6 +412,14 @@ def get_hp_specs(h_size_pyung):
     return     ("보일러실 크기",     "1,120 × 1,666 mm", "16 kW")
 
 
+def get_hp_capacity_kw(h_size_pyung):
+    """전용면적(평) → HP 용량 숫자(kW). 계산용."""
+    if h_size_pyung < 20:    return 6
+    if h_size_pyung <= 28:   return 10
+    if h_size_pyung <= 35:   return 12
+    return 16
+
+
 def calc_monthly_stats(monthly_ex_man, monthly_hp_man, fuel_key):
     """월별 절감액·누적·절감률·CO₂ 한 번에 계산."""
     co2_factor_fuel = CO2_PER_MAN_FUEL[fuel_key]
@@ -1079,8 +1087,8 @@ if st.session_state.analyzed:
     else:
         monthly_solar = None
 
-    # HP 용량 (get_hp_specs에서 이미 결정됨 — section 9 위쪽 참조)
-    _, _, hp_capa_for_calc = get_hp_specs(house_size)
+    # HP 용량 (계산용 숫자 — get_hp_specs는 문자열 "6 kW"라 별도 헬퍼 사용)
+    hp_capa_for_calc = get_hp_capacity_kw(house_size)
 
     result = calc_dynamic_result(
         tariff_label=tariff_label,
