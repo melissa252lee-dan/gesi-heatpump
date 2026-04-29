@@ -791,9 +791,16 @@ if st.session_state.analyzed:
         })
         st.dataframe(df_detail, use_container_width=True, hide_index=True)
         st.caption(
-            "💡 'HP 난방요금'은 히트펌프 난방·온수 전기 비용이며 가전·취사 사용분은 제외됩니다 "
-            "(기존 난방비와 동일 기준 비교). "
-            f"CO₂는 환경부 GIR 배출계수와 평균 단가({fuel_key}: {CO2_PER_MAN_FUEL[fuel_key]}kg/만원, "
+            "💡 **HP 난방요금**은 히트펌프의 난방·온수·냉방 전기 비용입니다 "
+            "(가전·취사 사용분은 제외 — 기존 난방비와 동일 기준 비교)."
+        )
+        st.caption(
+            "🌡️ **여름철(4~10월)에 비용이 보이는 이유**: 히트펌프는 난방뿐 아니라 **온수와 냉방까지 통합 운영**하는 기기입니다. "
+            "기존 가스 보일러 가구도 여름엔 온수용 가스를 사용하지만, 입력하신 '1월 난방비'를 기준으로 HDD 비율로 분배할 때 "
+            "비난방월은 0원으로 잡히는 구조라 음수 절감액이 표시될 수 있습니다 — **실제로 손해를 보는 것은 아니며, 연간 합계는 정확합니다**."
+        )
+        st.caption(
+            f"📊 CO₂는 환경부 GIR 배출계수와 평균 단가({fuel_key}: {CO2_PER_MAN_FUEL[fuel_key]}kg/만원, "
             f"전기: {CO2_PER_MAN_ELEC}kg/만원) 기반 추정치입니다."
         )
 
