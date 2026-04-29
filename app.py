@@ -273,10 +273,20 @@ def load_tariff_xlsx():
         kwh_hp     = {fuel: [float(ws_s2.cell(row=r, column=3+m).value or 0) for m in range(12)]
                       for fuel, r in SHEET2_HP_KWH_ROWS.items()}
 
+        # ── Sheet2 핵심 파라미터 (행 43 수식 복제용) ──
+        # 행 9 col 3-6: 연료별 효율  /  행 40: 기본요금  /  행 42: 단가(원/kWh)  /  행 14: 난방비중
+        fuel_order = ["도시가스(콘덴싱)", "도시가스(일반)", "등유", "LPG"]
+        sheet2_params = {
+            "efficiency":    {f: float(ws_s2.cell(row=9,  column=3+i).value or 0) for i, f in enumerate(fuel_order)},
+            "base_fee":      {f: float(ws_s2.cell(row=40, column=3+i).value or 0) for i, f in enumerate(fuel_order)},
+            "rate":          {f: float(ws_s2.cell(row=42, column=3+i).value or 0) for i, f in enumerate(fuel_order)},
+            "heating_share": float(ws_s2.cell(row=14, column=3).value or 0.85),
+        }
+
         # ── Sheet3 — 광역시도별 월별 난방 비중 (17개 시도 + 전국) ──
         ws_s3 = wb["Sheet3"]
         region_ratios = {}
-        for r in range(2, 20):  # row 2 = 전국, row 3-19 = 17개 시도
+        for r in range(2, 20):
             name = ws_s3.cell(row=r, column=1).value
             if not name: continue
             ratios = [float(ws_s3.cell(row=r, column=3+m).value or 0) for m in range(12)]
@@ -290,6 +300,7 @@ def load_tariff_xlsx():
             "monthly_temp":   monthly_temp,
             "kwh_demand":     kwh_demand,
             "kwh_hp":         kwh_hp,
+            "sheet2_params":  sheet2_params,
             "region_ratios":  region_ratios,
         }, None
     except Exception as e:
@@ -421,20 +432,34 @@ def calc_annual_co2_savings(ex_annual_man, hp_annual_man, fuel_key):
     return co2_saving, trees, car_km
 
 
-def calc_kwh_data(annual_demand_kwh, monthly_ratios, monthly_cop_zone, scale):
-    """지역별 비중 + 기후존별 월별 COP로 kWh 데이터 계산.
+def calc_demand_kwh_sheet2(annual_cost_won, fuel_key, sheet2_params):
+    """Sheet2 행 43 수식 그대로 복제 — 연간 난방 에너지 수요 (kWh) 계산.
+
+    수식 (도시가스):  ((연간요금 - 기본요금×12) ÷ 단가) × 난방비중 × 효율
+    수식 (등유/LPG):  (연간요금 ÷ 단가) × 효율  (기본요금 0, 난방비중 미적용)
+    """
+    base_fee = sheet2_params["base_fee"][fuel_key]
+    rate     = sheet2_params["rate"][fuel_key]
+    eff      = sheet2_params["efficiency"][fuel_key]
+    share    = sheet2_params["heating_share"]
+    if rate <= 0: return 0
+    fuel_input_kwh = (annual_cost_won - base_fee * 12) / rate
+    if "도시가스" in fuel_key:                # 도시가스만 난방비중 적용
+        fuel_input_kwh *= share
+    return max(0, fuel_input_kwh * eff)
+
+
+def calc_kwh_data(annual_demand_kwh, monthly_ratios, monthly_cop_zone):
+    """Sheet2 행 45-48, 53-56 수식 복제 — 월별 kWh 계산.
 
     Args:
-        annual_demand_kwh: 표준 가구의 연간 난방 수요(kWh) — 연료별 (거창군 기준)
+        annual_demand_kwh: 연간 난방 에너지 수요 (calc_demand_kwh_sheet2 결과)
         monthly_ratios:    사용자 광역시도의 월별 난방 비중 (Sheet3, 합=1)
-        monthly_cop_zone:  사용자 기후존의 월별 COP — 12개월
-        scale:             사용자 가구 규모 보정 계수
+        monthly_cop_zone:  사용자 기후존의 월별 COP
 
     Returns: dict with 월별/연간 kWh 및 효율
     """
-    # 지역별 비중으로 연간 수요를 월별 분배
-    monthly_demand = [round(annual_demand_kwh * r * scale, 1) for r in monthly_ratios]
-    # 월별 COP로 HP 전력 사용량 산정
+    monthly_demand = [round(annual_demand_kwh * r, 1) for r in monthly_ratios]
     monthly_hp = [round(d / cop, 1) if cop > 0 else 0.0
                   for d, cop in zip(monthly_demand, monthly_cop_zone)]
     annual_demand = round(sum(monthly_demand), 0)
@@ -640,8 +665,9 @@ if excel_data:
     HDD_MONTHLY   = excel_data["hdd"]           # 동적 로드된 HDD (Tbase=18°C)
     MONTHLY_COP   = excel_data["monthly_cop"]   # 월별 COP (참고용)
     MONTHLY_TEMP  = excel_data["monthly_temp"]  # 월평균 기온 (참고용)
-    KWH_DEMAND    = excel_data["kwh_demand"]    # Sheet2: 연료별 월별 난방 수요 (kWh)
-    KWH_HP        = excel_data["kwh_hp"]        # Sheet2: 연료별 월별 HP 전력 사용량 (kWh)
+    KWH_DEMAND    = excel_data["kwh_demand"]    # Sheet2: 연료별 월별 난방 수요 (참고용, 거창군 기준)
+    KWH_HP        = excel_data["kwh_hp"]        # Sheet2: 연료별 월별 HP 전력 사용량 (참고용)
+    SHEET2_PARAMS = excel_data["sheet2_params"] # Sheet2: 연료별 효율/단가/기본요금/난방비중
     REGION_RATIOS = excel_data["region_ratios"] # Sheet3: 광역시도별 월별 난방 비중
 
 col_title, col_logo = st.columns([6, 1])
@@ -833,9 +859,13 @@ if st.session_state.analyzed:
         result["ex_annual_man"], result["hp_annual_man"], fuel_key
     )
 
-    # 에너지 사용량 (kWh) — 지역별 비중 + 기후존별 월별 COP 사용
-    annual_demand_kwh_std = sum(KWH_DEMAND[fuel_key])  # 표준 가구 연 수요 (거창군 기준)
-    kwh = calc_kwh_data(annual_demand_kwh_std, monthly_ratios, MONTHLY_COP[zone], scale)
+    # 에너지 사용량 (kWh) — Sheet2 행 43 수식 그대로 복제
+    # 사용자 연간 난방비 = 1월 입력 ÷ 1월 비중 (지역별)
+    user_annual_cost_won = winter_heat_man * 10000 / monthly_ratios[0] if monthly_ratios[0] > 0 else 0
+    # Sheet2 행 43 수식으로 연간 난방 에너지 수요 산정
+    user_annual_demand_kwh = calc_demand_kwh_sheet2(user_annual_cost_won, fuel_key, SHEET2_PARAMS)
+    # 월별 분배 + HP 변환
+    kwh = calc_kwh_data(user_annual_demand_kwh, monthly_ratios, MONTHLY_COP[zone])
 
     # ─── 8-2. 결과 요약 헤더 ──────────────────────────────────────────
     st.markdown('<div class="section-title">📊 분석 결과 요약</div>', unsafe_allow_html=True)
