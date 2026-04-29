@@ -292,6 +292,18 @@ def load_tariff_xlsx():
             ratios = [float(ws_s3.cell(row=r, column=3+m).value or 0) for m in range(12)]
             region_ratios[name] = ratios
 
+        # ── 전기요금 시트 — 가전 월별 사용량 (행 23-34, col 3) ──
+        # 22년 전국 가구패널 기준 평균 가전 전력 사용량
+        appliance_kwh = [float(ws.cell(row=23+m, column=3).value or 0) for m in range(12)]
+
+        # ── 전기요금 시트 — 17개 시도별 월별 태양광 발전량 (col 37=시도, col 39-50=1~12월) ──
+        # 1kW 패널당 발전량 kWh
+        solar_kwh_by_region = {}
+        for r in range(5, 22):
+            name = ws.cell(row=r, column=37).value
+            if not name: continue
+            solar_kwh_by_region[name] = [float(ws.cell(row=r, column=39+m).value or 0) for m in range(12)]
+
         return {
             "blocks":         blocks,
             "scop":           scop,
@@ -302,6 +314,8 @@ def load_tariff_xlsx():
             "kwh_hp":         kwh_hp,
             "sheet2_params":  sheet2_params,
             "region_ratios":  region_ratios,
+            "appliance_kwh":  appliance_kwh,
+            "solar_kwh":      solar_kwh_by_region,
         }, None
     except Exception as e:
         return None, str(e)
@@ -474,7 +488,220 @@ def calc_kwh_data(annual_demand_kwh, monthly_ratios, monthly_cop_zone):
     }
 
 
-def simulate_18yr(net_capex_man, ann_heat_man, ann_hp_man, fuel_inflation_pct, elec_inflation_pct):
+def calc_progressive_billing(usage_kwh, month, solar_offset=0):
+    """누진제 적용 월별 청구액 계산 (전기요금 시트 J~Q열 수식 그대로 복제).
+
+    수식 출처: 전기요금!J6:Q6 (1월 누진제 태X 기준).
+
+    Args:
+        usage_kwh:    월별 총 사용량 (HP + 가전)
+        month:        1~12
+        solar_offset: 태양광 자가발전 차감량 (kWh, 태양광 설치 시)
+
+    Returns: 청구요금합계 (원, 10원 단위 절사)
+    """
+    # 태양광 자가발전 차감 (누진제 태O 케이스)
+    actual = max(usage_kwh - solar_offset, 0)
+
+    # 누진 단계 (7-8월 하계는 단계 다름)
+    if month in (7, 8):
+        step1_max, step2_max = 300, 450
+        step1_acc, step2_acc = 36000, 68190   # 누적 단가
+    else:
+        step1_max, step2_max = 200, 400
+        step1_acc, step2_acc = 24000, 66920
+
+    # 기본요금
+    if actual <= step1_max:    base_fee = 910
+    elif actual <= step2_max:  base_fee = 1600
+    else:                       base_fee = 7300
+
+    # 사용량요금 (단계별 누진)
+    if actual <= step1_max:
+        usage_fee = int(actual * 120)
+    elif actual <= step2_max:
+        usage_fee = int(step1_acc + (actual - step1_max) * 214.6)
+    else:
+        usage_fee = int(step2_acc + (actual - step2_max) * 307.3)
+
+    climate_fee = int(actual * 9)        # 기후환경요금
+    fuel_adj    = int(actual * 5)        # 연료비조정요금
+    total_fee   = base_fee + usage_fee + climate_fee + fuel_adj  # 전기요금계
+    vat         = round(total_fee * 0.1)                          # 부가가치세 10%
+    fund        = (int(total_fee * 0.027) // 10) * 10             # 기금 2.7% (10원 절사)
+    billing     = ((total_fee + vat + fund) // 10) * 10            # 청구합계 (10원 절사)
+    return billing
+
+
+def calc_hp_billing_progressive(monthly_hp_kwh, monthly_appliance_kwh, monthly_solar_kwh=None):
+    """누진제 케이스에서 HP 분리 청구액 12개월 계산 (전기요금!R 수식 복제).
+
+    R{m} = Q{m} × HP_kWh / (HP_kWh + 가전_kWh)
+    즉 전체 누진 청구액에서 HP가 차지하는 사용량 비율만큼 분리.
+
+    Args:
+        monthly_hp_kwh:        12개월 HP 전력 사용량
+        monthly_appliance_kwh: 12개월 가전 평균 사용량
+        monthly_solar_kwh:     12개월 태양광 발전량 (있으면 차감, 누진제 태O)
+
+    Returns: 12개월 HP 청구액 (원) 리스트
+    """
+    hp_won_monthly = []
+    for m in range(12):
+        hp_kwh = monthly_hp_kwh[m]
+        gadget_kwh = monthly_appliance_kwh[m]
+        solar = monthly_solar_kwh[m] if monthly_solar_kwh else 0
+        total_kwh = hp_kwh + gadget_kwh
+
+        # 누진제 적용한 전체 청구액
+        total_billing = calc_progressive_billing(total_kwh, m+1, solar_offset=solar)
+
+        # HP 분리 (사용량 비율)
+        hp_ratio = hp_kwh / total_kwh if total_kwh > 0 else 0
+        hp_won_monthly.append(round(total_billing * hp_ratio))
+
+    return hp_won_monthly
+
+
+# ─── 일반용 (HP 전용 미터) 단가 ───
+GENERAL_RATE_BY_MONTH = {1:119, 2:119, 11:119, 12:119,        # 겨울
+                         3:91.9, 4:91.9, 5:91.9, 9:91.9, 10:91.9,  # 봄가을
+                         6:132.4, 7:132.4, 8:132.4}            # 여름
+GENERAL_BASE_PER_KW = 6160      # 기본료 (원/kW)
+CONTRACT_COP_DIVISOR = 3        # 엑셀 D110: 계약전력 산정용 COP
+
+def calc_general_billing(hp_kwh, month, contract_kw):
+    """일반용 (HP 전용 미터) 청구액 — 전기요금!J110~Q110 수식 복제.
+
+    HP만 별도 미터로 측정. R = Q (HP 분리 안 함).
+    """
+    base_fee = contract_kw * GENERAL_BASE_PER_KW
+    rate = GENERAL_RATE_BY_MONTH[month]
+    usage_fee = int(hp_kwh * rate)              # ROUNDDOWN
+    climate_fee = int(hp_kwh * 9)
+    fuel_adj    = int(hp_kwh * 5)
+    total_fee   = base_fee + usage_fee + climate_fee + fuel_adj
+    vat         = round(total_fee * 0.1)
+    fund        = (int(total_fee * 0.027) // 10) * 10
+    billing     = ((total_fee + vat + fund) // 10) * 10
+    return billing
+
+
+# ─── 계시별 단가표 ───
+TOU_BASE_PER_KW = 4310       # 기본료 (원/kW)
+TOU_GADGET_KW   = 3          # 가전 추가 계약용량 (kW)
+TOU_RATES = {
+    "spring":        (125.8, 153.8, 172.4),  # 3-5, 9-10월 (경부하/중간/최대)
+    "winter_summer": (138.7, 184.7, 220.5),  # 1-2, 6-8, 11-12월
+}
+GADGET_TOU = (0.30, 0.30, 0.40)   # 가전 시간대 분포 (모든 월 동일)
+
+# HP의 시간대 분포 — 월별로 다름 (1월~12월)
+HP_TOU = [
+    (0.4337, 0.2876, 0.2787), (0.4403, 0.2880, 0.2716), (0.4416, 0.2826, 0.2758),
+    (0.4251, 0.2779, 0.2970), (0.3844, 0.3044, 0.3112), (0.3192, 0.3886, 0.2922),
+    (0.2680, 0.4376, 0.2944), (0.2688, 0.4515, 0.2797), (0.3032, 0.4048, 0.2920),
+    (0.4234, 0.2810, 0.2956), (0.4443, 0.2722, 0.2835), (0.4382, 0.2818, 0.2800),
+]
+# 태양광의 시간대 분배 — 월별로 다름 (계시별 태O용)
+SOLAR_TOU = [
+    (0.000062, 0.954981, 0.044957), (0.001791, 0.921596, 0.076613),
+    (0.011490, 0.896370, 0.092139), (0.026448, 0.868176, 0.105375),
+    (0.041831, 0.844735, 0.113434), (0.047395, 0.816742, 0.135862),
+    (0.036986, 0.818888, 0.144126), (0.032913, 0.858900, 0.108187),
+    (0.024481, 0.895608, 0.079911), (0.013153, 0.939251, 0.047596),
+    (0.003291, 0.971714, 0.024994), (0.000353, 0.977840, 0.021807),
+]
+
+def calc_tou_billing(hp_kwh, gadget_kwh, month, contract_kw, solar_kwh=0):
+    """계시별 청구액 — 전기요금!J162~Q162 (태X) / J214~Q214 (태O) 수식 복제."""
+    season = "spring" if month in (3,4,5,9,10) else "winter_summer"
+    rates = TOU_RATES[season]
+    hp_r = HP_TOU[month-1]
+    solar_r = SOLAR_TOU[month-1] if solar_kwh > 0 else (0, 0, 0)
+
+    base_fee = TOU_BASE_PER_KW * (contract_kw + TOU_GADGET_KW)
+
+    usage_fee = sum(
+        max(hp_kwh * hp_r[i] + gadget_kwh * GADGET_TOU[i] - solar_kwh * solar_r[i], 0) * rates[i]
+        for i in range(3)
+    )
+    usage_fee = int(usage_fee)   # ROUNDDOWN
+
+    total_after_solar = max(hp_kwh + gadget_kwh - solar_kwh, 0)
+    climate_fee = int(total_after_solar * 9)
+    fuel_adj    = int(total_after_solar * 5)
+
+    total_fee = base_fee + usage_fee + climate_fee + fuel_adj
+    vat       = round(total_fee * 0.1)
+    fund      = (int(total_fee * 0.027) // 10) * 10
+    billing   = ((total_fee + vat + fund) // 10) * 10
+    return billing
+
+
+def calc_dynamic_result(tariff_label, monthly_hp_kwh, monthly_appliance_kwh,
+                        monthly_solar_kwh, hp_capacity_kw, ex_annual_won):
+    """동적 계산 - 사용자 지역 기준 5개 요금제 모두 처리.
+
+    엑셀 전기요금 시트의 R/S/T/U 수식을 Python으로 복제.
+    apply_block_with_scale와 호환되는 dict 반환.
+
+    Args:
+        tariff_label:           "누진제 (태양광 미설치)" 등 5개 라벨
+        monthly_hp_kwh:         12개월 HP 전력 사용량 (사용자 지역 기준)
+        monthly_appliance_kwh:  12개월 가전 평균 사용량
+        monthly_solar_kwh:      12개월 태양광 발전량 (사용자 광역시도 기준)
+        hp_capacity_kw:         HP 용량 (get_hp_specs 결과)
+        ex_annual_won:          사용자 추정 연간 난방비 (원)
+
+    Returns: dict with monthly_won, monthly_man, hp_annual_man, ex_annual_man, saving_man, saving_ratio
+    """
+    import math
+
+    # 요금제·태양광 분기
+    tariff_kind, solar_on = TARIFF_LABEL_MAP[tariff_label]
+    contract_kw = math.ceil(hp_capacity_kw / CONTRACT_COP_DIVISOR)
+
+    monthly_hp_won = []
+    for m in range(12):
+        hp = monthly_hp_kwh[m]
+        gad = monthly_appliance_kwh[m]
+        solar = monthly_solar_kwh[m] if (solar_on == "태O" and monthly_solar_kwh) else 0
+        total = hp + gad
+
+        if tariff_kind == "누진제":
+            billing = calc_progressive_billing(total, m+1, solar_offset=solar)
+            hp_won = round(billing * hp / total) if total > 0 else 0
+
+        elif tariff_kind == "일반용":
+            # HP 전용 미터 — 가전·태양광 무관
+            hp_won = calc_general_billing(hp, m+1, contract_kw)
+
+        elif tariff_kind == "계시별":
+            billing = calc_tou_billing(hp, gad, m+1, contract_kw, solar_kwh=solar)
+            hp_won = round(billing * hp / total) if total > 0 else 0
+        else:
+            hp_won = 0
+
+        monthly_hp_won.append(hp_won)
+
+    monthly_man   = [round(w / 10000, 2) for w in monthly_hp_won]
+    hp_annual_man = round(sum(monthly_hp_won) / 10000, 1)
+    ex_annual_man = round(ex_annual_won / 10000, 1)
+    saving_man    = round(ex_annual_man - hp_annual_man, 1)
+    saving_ratio  = saving_man / ex_annual_man if ex_annual_man > 0 else 0
+
+    return {
+        "monthly_won":    monthly_hp_won,
+        "monthly_man":    monthly_man,
+        "hp_annual_man":  hp_annual_man,
+        "ex_annual_man":  ex_annual_man,
+        "saving_man":     saving_man,
+        "saving_ratio":   saving_ratio,
+    }
+
+
+
     """18년 누적 비용·순이익 시뮬레이션 (인플레이션 복리 적용).
 
     Returns: (years, gas_cum, hp_cum, net_profit, payback_year)
@@ -669,6 +896,8 @@ if excel_data:
     KWH_HP        = excel_data["kwh_hp"]        # Sheet2: 연료별 월별 HP 전력 사용량 (참고용)
     SHEET2_PARAMS = excel_data["sheet2_params"] # Sheet2: 연료별 효율/단가/기본요금/난방비중
     REGION_RATIOS = excel_data["region_ratios"] # Sheet3: 광역시도별 월별 난방 비중
+    APPLIANCE_KWH = excel_data["appliance_kwh"] # 전기요금 시트: 가전 월별 평균 사용량 (전국, 12개)
+    SOLAR_KWH     = excel_data["solar_kwh"]     # 전기요금 시트: 17개 시도 월별 1kW당 태양광 발전량
 
 col_title, col_logo = st.columns([6, 1])
 with col_title:
@@ -822,17 +1051,45 @@ if st.session_state.analyzed:
 
     # ─── 8-1. 핵심 계산 ───────────────────────────────────────────────
     block_key, tariff_choice, solar_flag = get_block_key(tariff_label, heating_type)
-    block    = tariff_blocks[block_key]
     fuel_key = HEATING_TYPE_MAP[heating_type]   # 이후 모든 곳에서 재사용
 
     # 광역시도별 월별 난방 비중 가져오기 (Sheet3) — 매핑 실패 시 전국 평균 사용
     sheet3_region_name = REGION_NAME_MAP.get(region, "전국")
     monthly_ratios = REGION_RATIOS.get(sheet3_region_name, REGION_RATIOS.get("전국"))
 
-    # 가구 규모 보정 — 사용자 지역의 월별 비중으로 표준 1월 난방비 산정
+    # 가구 규모 보정 — 사용자 지역의 월별 비중으로 표준 1월 난방비 산정 (가정값 표시용)
     csv_jan_man = calc_standard_jan_heat_man(monthly_ratios)
     scale       = (winter_heat_man / csv_jan_man) if csv_jan_man > 0 else 1.0
-    result      = apply_block_with_scale(block, scale)
+
+    # 에너지 사용량 (kWh) — Sheet2 행 43 수식 복제
+    # 사용자 연간 난방비 = 1월 입력 ÷ 1월 비중 (지역별)
+    user_annual_cost_won = winter_heat_man * 10000 / monthly_ratios[0] if monthly_ratios[0] > 0 else 0
+    # Sheet2 행 43 수식으로 연간 난방 에너지 수요 산정
+    user_annual_demand_kwh = calc_demand_kwh_sheet2(user_annual_cost_won, fuel_key, SHEET2_PARAMS)
+    # 월별 분배 + HP 변환 (사용자 지역 비중 + 사용자 zone 월별 COP)
+    kwh = calc_kwh_data(user_annual_demand_kwh, monthly_ratios, MONTHLY_COP[zone])
+
+    # ─── [동적 계산] 모든 요금제 — 거창군 묶임 완전 해제 ─────────────
+    # 사용자 지역의 실제 HP kWh + 가전 평균 사용량 + 광역시도별 태양광 발전량으로
+    # 5개 요금제(누진제 태X/태O, 일반용, 계시별 태X/태O) 청구액 모두 직접 계산.
+    # 태양광 설치 시: 사용자 광역시도의 1kW당 발전량 × 설치 용량(kW)
+    if solar_flag == "태O" and solar_capa_kw > 0:
+        region_solar = SOLAR_KWH.get(REGION_NAME_MAP.get(region, ""), None)
+        monthly_solar = [s * solar_capa_kw for s in region_solar] if region_solar else None
+    else:
+        monthly_solar = None
+
+    # HP 용량 (get_hp_specs에서 이미 결정됨 — section 9 위쪽 참조)
+    _, _, hp_capa_for_calc = get_hp_specs(house_size)
+
+    result = calc_dynamic_result(
+        tariff_label=tariff_label,
+        monthly_hp_kwh=kwh["monthly_hp"],
+        monthly_appliance_kwh=APPLIANCE_KWH,
+        monthly_solar_kwh=monthly_solar,
+        hp_capacity_kw=hp_capa_for_calc,
+        ex_annual_won=user_annual_cost_won,
+    )
 
     # 보조금 및 투자비
     total_subsidy = (SUBSIDY_NATIONAL if use_subsidy_nat else 0) + (SUBSIDY_LOCAL if use_subsidy_loc else 0)
@@ -859,13 +1116,6 @@ if st.session_state.analyzed:
         result["ex_annual_man"], result["hp_annual_man"], fuel_key
     )
 
-    # 에너지 사용량 (kWh) — Sheet2 행 43 수식 그대로 복제
-    # 사용자 연간 난방비 = 1월 입력 ÷ 1월 비중 (지역별)
-    user_annual_cost_won = winter_heat_man * 10000 / monthly_ratios[0] if monthly_ratios[0] > 0 else 0
-    # Sheet2 행 43 수식으로 연간 난방 에너지 수요 산정
-    user_annual_demand_kwh = calc_demand_kwh_sheet2(user_annual_cost_won, fuel_key, SHEET2_PARAMS)
-    # 월별 분배 + HP 변환
-    kwh = calc_kwh_data(user_annual_demand_kwh, monthly_ratios, MONTHLY_COP[zone])
 
     # ─── 8-2. 결과 요약 헤더 ──────────────────────────────────────────
     st.markdown('<div class="section-title">📊 분석 결과 요약</div>', unsafe_allow_html=True)
