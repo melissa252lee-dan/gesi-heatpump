@@ -171,6 +171,27 @@ SHEET2_HP_KWH_ROWS = {
     "도시가스(콘덴싱)": 53, "도시가스(일반)": 54, "등유": 55, "LPG": 56,
 }
 
+# ── Sheet3 광역 시도별 월별 난방 비중 매핑 ──
+# 사이트의 약식 시도명 → Sheet3의 정식 명칭
+REGION_NAME_MAP = {
+    "서울": "서울특별시", "부산": "부산광역시", "대구": "대구광역시",
+    "인천": "인천광역시", "광주": "광주광역시", "대전": "대전광역시",
+    "울산": "울산광역시", "세종": "세종특별자치시",
+    "경기도":   "경기도",       "강원도":   "강원특별자치도",
+    "충청북도": "충청북도",     "충청남도": "충청남도",
+    "전라북도": "전북특별자치도", "전라남도": "전라남도",
+    "경상북도": "경상북도",     "경상남도": "경상남도",
+    "제주도":   "제주특별자치도",
+}
+
+# ── 기초지자체별 zone 오버라이드 (Sheet2 B49 수식 로직) ──
+# 광역 시도만으로는 정확하지 않은 지역 — 기초지자체까지 봐야 함
+COASTAL_GANGWON   = {"고성군", "속초시", "양양군", "강릉시", "동해시", "삼척시"}  # 강원 해안 → 중부2
+NORTHERN_GYEONGGI = {"연천군", "포천시", "가평군", "남양주시", "의정부시", "양주시", "동두천시", "파주시"}  # 경기 북부 → 중부1
+SOUTHERN_GYEONGBUK = {"울진군", "영덕군", "포항시", "경주시", "청도군", "경산시"}  # 경북 남쪽 → 남부
+NORTHERN_GYEONGBUK = {"봉화군", "청송군"}  # 경북 북쪽 → 중부1
+INNER_GYEONGNAM = {"거창군", "함양군"}  # 경남 내륙 → 중부2 (다른 경남은 남부)
+
 # ── 엑셀 표준 가구 연 난방비(원) — 모든 블록 동일 ──
 EXCEL_BASE_ANNUAL_WON = 650516
 
@@ -252,14 +273,24 @@ def load_tariff_xlsx():
         kwh_hp     = {fuel: [float(ws_s2.cell(row=r, column=3+m).value or 0) for m in range(12)]
                       for fuel, r in SHEET2_HP_KWH_ROWS.items()}
 
+        # ── Sheet3 — 광역시도별 월별 난방 비중 (17개 시도 + 전국) ──
+        ws_s3 = wb["Sheet3"]
+        region_ratios = {}
+        for r in range(2, 20):  # row 2 = 전국, row 3-19 = 17개 시도
+            name = ws_s3.cell(row=r, column=1).value
+            if not name: continue
+            ratios = [float(ws_s3.cell(row=r, column=3+m).value or 0) for m in range(12)]
+            region_ratios[name] = ratios
+
         return {
-            "blocks":       blocks,
-            "scop":         scop,
-            "hdd":          hdd,
-            "monthly_cop":  monthly_cop,
-            "monthly_temp": monthly_temp,
-            "kwh_demand":   kwh_demand,
-            "kwh_hp":       kwh_hp,
+            "blocks":         blocks,
+            "scop":           scop,
+            "hdd":            hdd,
+            "monthly_cop":    monthly_cop,
+            "monthly_temp":   monthly_temp,
+            "kwh_demand":     kwh_demand,
+            "kwh_hp":         kwh_hp,
+            "region_ratios":  region_ratios,
         }, None
     except Exception as e:
         return None, str(e)
@@ -269,11 +300,36 @@ def load_tariff_xlsx():
 # 4. 계산 함수
 # ══════════════════════════════════════════════════════════════════════
 
-def map_region_to_zone(region):
-    """광역 지자체명 → 기후 존(zone) 매핑."""
-    if region == "강원도": return "중부1"
-    if region == "제주도": return "제주"
-    if region in {"대구", "부산", "울산", "광주", "경상남도", "전라남도"}: return "남부"
+def map_region_to_zone(region, sub_region=""):
+    """광역+기초지자체 조합으로 기후존 결정 (엑셀 Sheet2 B49 수식 로직 복제).
+
+    더 정밀한 분류: 강원 해안(따뜻함) / 경기 북부(추움) / 경북 남쪽(따뜻함) 등 반영.
+    """
+    # 제주
+    if region == "제주도":
+        return "제주"
+    # 남부 (해안 따뜻한 광역)
+    if region in {"부산", "대구", "울산", "광주", "전라남도"}:
+        return "남부"
+    # 남부 (경북 남쪽)
+    if region == "경상북도" and sub_region in SOUTHERN_GYEONGBUK:
+        return "남부"
+    # 남부 (경남, 단 거창·함양 제외)
+    if region == "경상남도" and sub_region not in INNER_GYEONGNAM:
+        return "남부"
+    # 중부1 (강원 산악)
+    if region == "강원도" and sub_region not in COASTAL_GANGWON:
+        return "중부1"
+    # 중부1 (경기 북부)
+    if region == "경기도" and sub_region in NORTHERN_GYEONGGI:
+        return "중부1"
+    # 중부1 (충북 제천)
+    if region == "충청북도" and sub_region == "제천시":
+        return "중부1"
+    # 중부1 (경북 북쪽 봉화·청송)
+    if region == "경상북도" and sub_region in NORTHERN_GYEONGBUK:
+        return "중부1"
+    # 나머지 = 중부2 (서울/대전/세종/인천/충남/전북/강원해안/경기 외/충북 외/경남 거창함양/경북 외)
     return "중부2"
 
 
@@ -287,16 +343,16 @@ def get_block_key(tariff_label, heating_ui):
     return (tariff, solar, heating), tariff, solar
 
 
-def calc_csv_jan_heat_man(hdd_zone):
+def calc_standard_jan_heat_man(monthly_distribution):
     """엑셀 표준 가구의 1월 난방비(만원) 추정.
 
-    표준 연간 난방비(650,516원)를 사용자 지역의 HDD 비율로 안분.
+    표준 연간 난방비(650,516원)를 월별 사용 비중으로 안분하여 1월 비중만 추출.
 
     Args:
-        hdd_zone: 해당 기후존의 12개월 HDD 리스트
+        monthly_distribution: 12개월 사용량 분포 (kWh 또는 비중) — 1월 시작
     """
-    if sum(hdd_zone) == 0: return 0
-    return EXCEL_BASE_ANNUAL_WON * hdd_zone[0] / sum(hdd_zone) / 10000
+    if sum(monthly_distribution) == 0: return 0
+    return EXCEL_BASE_ANNUAL_WON * monthly_distribution[0] / sum(monthly_distribution) / 10000
 
 
 def apply_block_with_scale(block, scale):
@@ -365,29 +421,31 @@ def calc_annual_co2_savings(ex_annual_man, hp_annual_man, fuel_key):
     return co2_saving, trees, car_km
 
 
-def calc_kwh_data(kwh_demand_fuel, kwh_hp_fuel, scale):
-    """Sheet2 기반 월별 에너지 사용량(kWh) 계산.
-
-    표준 가구의 kWh × 사용자 가구 scale 적용.
+def calc_kwh_data(annual_demand_kwh, monthly_ratios, monthly_cop_zone, scale):
+    """지역별 비중 + 기후존별 월별 COP로 kWh 데이터 계산.
 
     Args:
-        kwh_demand_fuel: 표준 가구의 월별 난방 에너지 수요(kWh) — 12개월
-        kwh_hp_fuel:     표준 가구의 월별 HP 전력 사용량(kWh) — 12개월
-        scale:           사용자 가구 규모 보정 계수
+        annual_demand_kwh: 표준 가구의 연간 난방 수요(kWh) — 연료별 (거창군 기준)
+        monthly_ratios:    사용자 광역시도의 월별 난방 비중 (Sheet3, 합=1)
+        monthly_cop_zone:  사용자 기후존의 월별 COP — 12개월
+        scale:             사용자 가구 규모 보정 계수
 
-    Returns: dict — 월별/연간 kWh 및 효율 비율
+    Returns: dict with 월별/연간 kWh 및 효율
     """
-    monthly_demand = [round(v * scale, 1) for v in kwh_demand_fuel]
-    monthly_hp     = [round(v * scale, 1) for v in kwh_hp_fuel]
-    annual_demand  = round(sum(monthly_demand), 0)
-    annual_hp      = round(sum(monthly_hp), 0)
-    efficiency     = round(annual_demand / annual_hp, 1) if annual_hp > 0 else 0.0
+    # 지역별 비중으로 연간 수요를 월별 분배
+    monthly_demand = [round(annual_demand_kwh * r * scale, 1) for r in monthly_ratios]
+    # 월별 COP로 HP 전력 사용량 산정
+    monthly_hp = [round(d / cop, 1) if cop > 0 else 0.0
+                  for d, cop in zip(monthly_demand, monthly_cop_zone)]
+    annual_demand = round(sum(monthly_demand), 0)
+    annual_hp     = round(sum(monthly_hp), 0)
+    efficiency    = round(annual_demand / annual_hp, 1) if annual_hp > 0 else 0.0
     return {
         "monthly_demand": monthly_demand,
         "monthly_hp":     monthly_hp,
         "annual_demand":  annual_demand,
         "annual_hp":      annual_hp,
-        "efficiency":     efficiency,   # 기존 / HP — "X배 효율"
+        "efficiency":     efficiency,
     }
 
 
@@ -584,6 +642,7 @@ if excel_data:
     MONTHLY_TEMP  = excel_data["monthly_temp"]  # 월평균 기온 (참고용)
     KWH_DEMAND    = excel_data["kwh_demand"]    # Sheet2: 연료별 월별 난방 수요 (kWh)
     KWH_HP        = excel_data["kwh_hp"]        # Sheet2: 연료별 월별 HP 전력 사용량 (kWh)
+    REGION_RATIOS = excel_data["region_ratios"] # Sheet3: 광역시도별 월별 난방 비중
 
 col_title, col_logo = st.columns([6, 1])
 with col_title:
@@ -658,7 +717,7 @@ with col3:
 with col4:
     house_size = st.number_input("전용 면적 (평)", min_value=10, value=30)
 
-zone        = map_region_to_zone(region)
+zone        = map_region_to_zone(region, sub_region)
 dynamic_cop = SCOP_BY_ZONE[zone]
 
 # ── 섹션 2: 에너지 소비 ──
@@ -740,8 +799,12 @@ if st.session_state.analyzed:
     block    = tariff_blocks[block_key]
     fuel_key = HEATING_TYPE_MAP[heating_type]   # 이후 모든 곳에서 재사용
 
-    # 가구 규모 보정
-    csv_jan_man = calc_csv_jan_heat_man(HDD_MONTHLY[zone])
+    # 광역시도별 월별 난방 비중 가져오기 (Sheet3) — 매핑 실패 시 전국 평균 사용
+    sheet3_region_name = REGION_NAME_MAP.get(region, "전국")
+    monthly_ratios = REGION_RATIOS.get(sheet3_region_name, REGION_RATIOS.get("전국"))
+
+    # 가구 규모 보정 — 사용자 지역의 월별 비중으로 표준 1월 난방비 산정
+    csv_jan_man = calc_standard_jan_heat_man(monthly_ratios)
     scale       = (winter_heat_man / csv_jan_man) if csv_jan_man > 0 else 1.0
     result      = apply_block_with_scale(block, scale)
 
@@ -757,11 +820,12 @@ if st.session_state.analyzed:
         net_capex_man, ann_heat_base, ann_hp_op, fuel_inflation, elec_inflation
     )
 
-    # 월별 데이터
+    # 월별 기존 난방비 — 사용자 광역시도의 월별 비중으로 안분 (Sheet3 데이터)
+    # 비난방월에도 온수 사용분이 있어 0이 되지 않음
     months = list(range(1, 13))
-    hdd_zone = HDD_MONTHLY[zone]
-    hdd_jan  = hdd_zone[0] if hdd_zone[0] > 0 else 1
-    monthly_ex_man = [round(winter_heat_man * hdd_zone[m-1] / hdd_jan, 2) for m in months]
+    hdd_zone = HDD_MONTHLY[zone]            # 비고 표시용 (난방월/비난방월 판단)
+    jan_ratio = monthly_ratios[0] if monthly_ratios[0] > 0 else 1
+    monthly_ex_man = [round(winter_heat_man * monthly_ratios[m-1] / jan_ratio, 2) for m in months]
     monthly_stats  = calc_monthly_stats(monthly_ex_man, result["monthly_man"], fuel_key)
 
     # 연간 CO₂ 절감 + 환경 비유
@@ -769,8 +833,9 @@ if st.session_state.analyzed:
         result["ex_annual_man"], result["hp_annual_man"], fuel_key
     )
 
-    # 에너지 사용량 (kWh) — Sheet2 기반 (사용자 가구 규모로 보정)
-    kwh = calc_kwh_data(KWH_DEMAND[fuel_key], KWH_HP[fuel_key], scale)
+    # 에너지 사용량 (kWh) — 지역별 비중 + 기후존별 월별 COP 사용
+    annual_demand_kwh_std = sum(KWH_DEMAND[fuel_key])  # 표준 가구 연 수요 (거창군 기준)
+    kwh = calc_kwh_data(annual_demand_kwh_std, monthly_ratios, MONTHLY_COP[zone], scale)
 
     # ─── 8-2. 결과 요약 헤더 ──────────────────────────────────────────
     st.markdown('<div class="section-title">📊 분석 결과 요약</div>', unsafe_allow_html=True)
@@ -890,9 +955,8 @@ if st.session_state.analyzed:
             "(가전·취사 사용분은 제외 — 기존 난방비와 동일 기준 비교)."
         )
         st.caption(
-            "🌡️ **여름철(4~10월)에 비용이 보이는 이유**: 히트펌프는 난방뿐 아니라 **온수와 냉방까지 통합 운영**하는 기기입니다. "
-            "기존 가스 보일러 가구도 여름엔 온수용 가스를 사용하지만, 입력하신 '1월 난방비'를 기준으로 HDD 비율로 분배할 때 "
-            "비난방월은 0원으로 잡히는 구조라 음수 절감액이 표시될 수 있습니다 — **실제로 손해를 보는 것은 아니며, 연간 합계는 정확합니다**."
+            f"📅 **월별 분배 기준**: 입력하신 광역시도({region})의 평균 월별 난방 비중(엑셀 Sheet3)을 사용자의 1월 입력값에 비례하여 분배한 추정치입니다. "
+            "여름철에도 온수·취사 등으로 일부 가스 비용이 발생하는 것이 반영되어 있습니다."
         )
         st.caption(
             f"⚡ **HP 전력 사용(kWh)**은 누진제 사용자가 자기 누진 구간을 예측하는 데 도움이 됩니다 "
@@ -948,6 +1012,7 @@ if st.session_state.analyzed:
 | 기존 연간 난방비 | **{ann_heat_base}만원** | 엑셀 기존난방비 × 규모 보정 |
 | HP 연간 전기요금 | **{ann_hp_op}만원** | 엑셀 HP연합계 × 규모 보정 |
 | 지역 sCOP (참고) | **{dynamic_cop}** | 기후 존 ({zone}) 추정값 |
+| 월별 비중 출처 | **{REGION_NAME_MAP.get(region, '전국')}** | 엑셀 Sheet3 광역시도별 데이터 |
         """)
 
     # ─── 8-9. 엑셀 다운로드 ──────────────────────────────────────────
