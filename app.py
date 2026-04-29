@@ -261,7 +261,7 @@ def load_tariff_xlsx():
         scop, hdd, monthly_cop, monthly_temp = {}, {}, {}, {}
         for zone, r_temp in zone_rows.items():
             r_hdd, r_cop = r_temp + 1, r_temp + 2
-            scop[zone] = float(ws_cop.cell(row=r_temp, column=16).value or 0)
+            scop[zone] = round(float(ws_cop.cell(row=r_temp, column=16).value or 0), 2)
             monthly_temp[zone] = [float(ws_cop.cell(row=r_temp, column=3+m).value or 0) for m in range(12)]
             hdd[zone]          = [float(ws_cop.cell(row=r_hdd,  column=3+m).value or 0) for m in range(12)]
             monthly_cop[zone]  = [float(ws_cop.cell(row=r_cop,  column=3+m).value or 0) for m in range(12)]
@@ -981,7 +981,7 @@ with col4:
     house_size = st.number_input("전용 면적 (평)", min_value=10, value=30)
 
 zone        = map_region_to_zone(region, sub_region)
-dynamic_cop = SCOP_BY_ZONE[zone]
+dynamic_cop = SCOP_BY_ZONE[zone]   # 로드 시점에 이미 2자리로 round됨 (2.90/3.18/3.43/3.56)
 
 # ── 섹션 2: 에너지 소비 ──
 st.markdown('<div class="section-title">2. 에너지 소비 현황</div>', unsafe_allow_html=True)
@@ -1299,7 +1299,7 @@ if st.session_state.analyzed:
 | 순 투자비 | **{net_capex_man}만원** | CAPEX − 보조금 |
 | 기존 연간 난방비 | **{ann_heat_base}만원** | 엑셀 기존난방비 × 규모 보정 |
 | HP 연간 전기요금 | **{ann_hp_op}만원** | 엑셀 HP연합계 × 규모 보정 |
-| 지역 sCOP (참고) | **{dynamic_cop}** | 기후 존 ({zone}) 추정값 |
+| 지역 sCOP (참고) | **{dynamic_cop:.2f}** | 기후 존 ({zone}) 추정값 |
 | 월별 비중 출처 | **{REGION_NAME_MAP.get(region, '전국')}** | 엑셀 Sheet3 광역시도별 데이터 |
         """)
 
