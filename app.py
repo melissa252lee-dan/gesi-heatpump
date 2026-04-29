@@ -118,6 +118,19 @@ HEATING_TYPE_MAP = {
     "LPG 보일러":         "LPG",
 }
 
+# ── 5개 요금제 탭 → (엑셀 요금제, 엑셀 태양광 플래그) 매핑 ──
+# 사용자에게 노출되는 라벨은 "태양광 설치/미설치"로 표기, 엑셀 내부 키는 태O/태X 그대로 유지
+TARIFF_LABEL_MAP = {
+    "누진제 (태양광 미설치)":   ("누진제", "태X"),
+    "누진제 (태양광 설치)":    ("누진제", "태O"),
+    "일반용 (HP 전용 미터)":   ("일반용", "태X"),  # 별도 미터 → 태양광 무관
+    "계시별 (태양광 미설치)":  ("계시별", "태X"),
+    "계시별 (태양광 설치)":   ("계시별", "태O"),
+}
+
+# 태양광 플래그 → 사용자 친화 라벨
+SOLAR_LABEL = {"태O": "태양광 설치", "태X": "태양광 미설치"}
+
 
 # ══════════════════════════════════════════════════════════
 # 3. 엑셀 로더
@@ -197,18 +210,16 @@ def calc_capex(h_type, h_size):
     return 1000
 
 
-def get_block_key(tariff_choice, s_capa, heating_ui):
+def get_block_key(tariff_label, heating_ui):
     """
-    UI 입력으로부터 엑셀 블록 키 결정.
-    - 태양광 0 → 태X, 0보다 크면 → 태O
-    - 일반용은 항상 태X (별도 미터)
+    UI 라벨로부터 엑셀 블록 키 결정.
+    - tariff_label: 5개 옵션 중 하나 (TARIFF_LABEL_MAP의 키)
+    - heating_ui:   사용자가 선택한 난방 방식
+    반환: ((요금제, 태양광플래그, 난방유형), 태양광플래그)
     """
+    tariff, solar = TARIFF_LABEL_MAP[tariff_label]
     heating = HEATING_TYPE_MAP.get(heating_ui, "도시가스(콘덴싱)")
-    if tariff_choice == "일반용":
-        solar = "태X"
-    else:
-        solar = "태O" if s_capa > 0 else "태X"
-    return (tariff_choice, solar, heating), solar
+    return (tariff, solar, heating), tariff, solar
 
 
 def calc_csv_jan_heat_man(zone):
@@ -253,22 +264,49 @@ with col_t: st.title("히트펌프 경제성 분석 솔루션")
 with col_l:
     if os.path.exists("logo.png"): st.image(Image.open("logo.png"), use_container_width=True)
 
+# 로드 실패 시에만 안내 (성공 시에는 조용히 통과)
 if load_err:
     st.error(f"⚠️ 전기요금완료본.xlsx 로드 실패: {load_err}")
     st.info("repo 루트(또는 app.py 옆)에 `전기요금완료본.xlsx` 파일이 있는지 확인해 주세요.")
     st.stop()
-else:
-    st.success(f"✅ 전기요금완료본.xlsx 로드 완료 — 총 {len(tariff_blocks)}개 블록 사용 가능")
 
 st.markdown("""
 <div class='info-box'>
-  <h4 class='info-title'>💡 솔루션 개요</h4>
-  <p class='info-text'>
-    🏠 <b>시민이 직접 해보는 탄소중립 계산기:</b> 거주 환경과 평소 에너지 사용량만 입력하면,
-    친환경 히트펌프(AWHP) 전환 시 <b>얼마나 경제적 이득인지</b> 바로 확인하실 수 있습니다.<br><br>
-    ⚡ <b>요금제·태양광 자동 매칭:</b> 선택하신 전기 요금제와 태양광 용량(kW)에 따라
-    엑셀 데이터의 정확한 블록(태O / 태X)을 자동으로 적용합니다.
-  </p>
+  <h4 class='info-title'>💡 이 계산기가 왜 필요한가요?</h4>
+
+  <div style='margin-bottom:20px;'>
+    <p style='color:#0f172a; font-size:1.05rem; font-weight:600; margin-bottom:6px;'>🌍 왜 지금 히트펌프인가요?</p>
+    <p class='info-text'>
+      우리나라 가정의 난방은 대부분 <b>가스·등유 보일러</b>로 이루어지고 있고, 이는 가정에서 발생하는
+      탄소 배출의 가장 큰 원인입니다. 정부는 <b>2050 탄소중립</b> 목표 달성을 위해 친환경 히트펌프
+      전환 시 <b>최대 840만원의 보조금</b>(정부 560 + 지자체 280)을 지원하고 있어요. 가스요금이
+      해마다 오르는 만큼, 지금이 우리 집 난방을 바꾸는 게 정말 이득인지 미리 따져볼 좋은 시점입니다.
+    </p>
+  </div>
+
+  <div style='margin-bottom:20px;'>
+    <p style='color:#0f172a; font-size:1.05rem; font-weight:600; margin-bottom:6px;'>🏠 히트펌프(AWHP)가 뭔가요?</p>
+    <p class='info-text'>
+      <b>공기 중에 있는 열을 모아 난방에 쓰는 친환경 기기</b>입니다. 에어컨이 실내 열을 밖으로 빼내는
+      것과 정반대로 작동하는 원리예요. 가스를 태우는 게 아니라 전기로 움직이고, 같은 에너지로
+      <b>가스보일러보다 약 3~4배 효율</b>이 나옵니다. 그래서 태양광 설비를 함께 쓰면
+      난방비를 거의 0에 가깝게 만들 수도 있습니다.
+    </p>
+  </div>
+
+  <div>
+    <p style='color:#0f172a; font-size:1.05rem; font-weight:600; margin-bottom:6px;'>📝 어떻게 사용하나요?</p>
+    <ol style='color:#475569; font-size:1.0rem; line-height:1.85; margin:0; padding-left:22px;'>
+      <li>우리 집 <b>지역과 평수</b>를 골라주세요</li>
+      <li>지난겨울 <b>1월 난방비와 전기요금</b>, 현재 쓰는 <b>난방 방식</b>을 입력해 주세요
+        <span style='color:#94a3b8; font-size:0.9rem;'>(고지서를 참고하시면 가장 정확합니다)</span></li>
+      <li>사용 중인 <b>전기 요금제</b>를 5가지 중 하나 골라주세요
+        <span style='color:#94a3b8; font-size:0.9rem;'>(태양광 설치 여부 포함)</span></li>
+      <li>받을 수 있는 <b>보조금</b>을 체크하세요</li>
+      <li><b>'경제성 분석 실행'</b> 버튼을 누르면 끝!
+        <span style='color:#94a3b8; font-size:0.9rem;'>절감액·투자 회수 기간이 한 눈에 보이고, 상세 결과는 엑셀로 다운받을 수 있습니다.</span></li>
+    </ol>
+  </div>
 </div>
 """, unsafe_allow_html=True)
 
@@ -312,7 +350,7 @@ with cs1:
     s_capa = st.number_input(
         "태양광 용량 (kW)",
         value=0.0,
-        help="0kW 입력 시 엑셀 '태X' 블록, 0kW 초과 시 '태O' 블록이 자동 적용됩니다."
+        help="태양광 설치 시 발전 용량을 입력해 주세요. (요금제 선택에서 '태양광 설치' 옵션을 함께 골라야 적용됩니다)"
     )
 
 with cs2:
@@ -325,22 +363,19 @@ with cs2:
     st.markdown("**전기 요금제 선택**")
     st.markdown("""
 <div class='help-text'>
-선택한 요금제 + 태양광 용량 입력에 따라 엑셀 블록이 자동 적용됩니다.
+사용 중인 요금제와 태양광 설치 여부에 맞춰 선택해 주세요.
 </div>""", unsafe_allow_html=True)
 
-    tariff_choice = st.radio(
+    tariff_label = st.radio(
         "요금제",
-        ["누진제", "일반용", "계시별"],
-        horizontal=True,
+        list(TARIFF_LABEL_MAP.keys()),
         label_visibility="collapsed",
-        help="누진제: 주택용 저압 누진제 / 일반용: HP 전용 별도 미터 / 계시별: 시간대별 요금제",
+        help="누진제: 주택용 저압 누진제 / 일반용: HP 전용 별도 미터 (태양광 영향 없음) / 계시별: 시간대별 요금제",
     )
-    if tariff_choice == "일반용":
-        st.caption("ℹ️ 일반용은 HP 전용 별도 미터라 태양광 영향 없음 (항상 태X 블록 사용).")
 
 # 입력 변경 감지
 _input_key = (w_heat, w_elec, s_reg, h_type, h_size, heating_type, cooking_type,
-              f_inf, e_inf, s_capa, sub_nat, sub_loc, tariff_choice)
+              f_inf, e_inf, s_capa, sub_nat, sub_loc, tariff_label)
 if st.session_state.get("_last_input_key") != _input_key:
     st.session_state.analyzed = False
     st.session_state["_last_input_key"] = _input_key
@@ -356,7 +391,7 @@ if st.button("경제성 분석 실행", type="primary", use_container_width=True
 if st.session_state.analyzed:
 
     # ── ① 엑셀 블록 결정 ──
-    block_key, solar_flag = get_block_key(tariff_choice, s_capa, heating_type)
+    block_key, tariff_choice, solar_flag = get_block_key(tariff_label, heating_type)
     block = tariff_blocks[block_key]
 
     # ── ② 가구 규모 보정 ──
@@ -388,10 +423,17 @@ if st.session_state.analyzed:
     # ══════════════════════════════════════════════════════════
     st.markdown('<div class="section-title">📊 분석 결과 요약</div>', unsafe_allow_html=True)
 
+    # 배지 색상: 태양광 설치=초록, 미설치=노랑, 일반용=파랑
+    if solar_flag == "태O":
+        badge_cls = "solar-badge-o"
+    elif tariff_choice == "일반용":
+        badge_cls = "tariff-badge"
+    else:
+        badge_cls = "solar-badge-x"
+
     st.markdown(f"""
 <div style='margin-bottom:16px;'>
-  <span class='tariff-badge'>요금제: {tariff_choice}</span>
-  <span class='{"solar-badge-o" if solar_flag == "태O" else "solar-badge-x"}'>태양광: {solar_flag} ({s_capa}kW)</span>
+  <span class='{badge_cls}'>{tariff_label}</span>
   <span class='tariff-badge'>난방: {HEATING_TYPE_MAP[heating_type]}</span>
   <span class='tariff-badge'>규모 보정: ×{round(scale, 2)}</span>
 </div>
@@ -420,7 +462,7 @@ if st.session_state.analyzed:
     s1.metric(
         "HP 연간 전기요금",
         f"{result['hp_annual_man']:,.1f} 만원",
-        help=f"엑셀 [{tariff_choice}/{solar_flag}/{HEATING_TYPE_MAP[heating_type]}] HP 연합계 × 규모보정"
+        help=f"[{tariff_label} / {HEATING_TYPE_MAP[heating_type]}] 블록 HP 연합계 × 규모보정"
     )
     s2.metric(
         f"기존 연간 난방비 ({HEATING_TYPE_MAP[heating_type]})",
@@ -492,7 +534,8 @@ if st.session_state.analyzed:
         st.markdown(f"""
 | 항목 | 적용값 | 근거 |
 |------|--------|------|
-| 적용 블록 | **{tariff_choice} / {solar_flag} / {HEATING_TYPE_MAP[heating_type]}** | 전기요금완료본.xlsx |
+| 적용 요금제 | **{tariff_label}** | 전기요금완료본.xlsx |
+| 적용 난방 유형 | **{HEATING_TYPE_MAP[heating_type]}** | 사용자 선택 |
 | 규모 보정 계수 | **×{round(scale, 2)}** | 사용자 1월 난방비({w_heat}만원) ÷ 엑셀 기준({csv_jan_man:.2f}만원) |
 | 설비 CAPEX | **{capex}만원** | 국내 기업 자료 (설치비 포함) |
 | 정부+지방 보조금 | **{total_sub}만원** | {"정부 560 + 지방 280" if sub_nat and sub_loc else ("정부 560만원" if sub_nat else "지방 280만원" if sub_loc else "없음")} |
@@ -520,16 +563,16 @@ if st.session_state.analyzed:
     # ① 입력·가정 시트
     ws1 = wb.active; ws1.title = "①입력_가정"
     ws1.merge_cells("A1:D1")
-    ws1["A1"] = f"히트펌프 경제성 분석 ({s_reg} / {tariff_choice} / {solar_flag})"
+    ws1["A1"] = f"히트펌프 경제성 분석 ({s_reg} / {tariff_label})"
     ws1["A1"].fill = hf; ws1["A1"].font = fw; ws1["A1"].alignment = center
     rows1 = [
         ("항목",            "값",                                         "단위",   "산출 근거"),
         ("1월 난방비",       w_heat,                                       "만원",   "사용자 입력"),
         ("1월 전기요금",     w_elec,                                       "만원",   "사용자 입력"),
         ("난방 방식",        HEATING_TYPE_MAP[heating_type],               "-",      "사용자 선택"),
-        ("전기 요금제",      tariff_choice,                                "-",      "사용자 선택"),
-        ("태양광 용량",      s_capa,                                       "kW",     f"입력 → 블록: {solar_flag}"),
-        ("적용 엑셀 블록",   f"{tariff_choice}/{solar_flag}/{HEATING_TYPE_MAP[heating_type]}", "-", "전기요금완료본.xlsx"),
+        ("전기 요금제",      tariff_label,                                 "-",      "사용자 선택"),
+        ("태양광 용량",      s_capa,                                       "kW",     "사용자 입력 (참고용)"),
+        ("적용 데이터",      f"{tariff_label} / {HEATING_TYPE_MAP[heating_type]}", "-", "전기요금완료본.xlsx"),
         ("규모 보정 계수",   round(scale, 2),                              "배",     f"={w_heat}÷{round(csv_jan_man,2)}"),
         ("지역 sCOP",        dynamic_cop,                                  "-",      f"기후 존 ({zone})"),
         ("설비 CAPEX",       capex,                                        "만원",   "국내 기업 자료"),
@@ -552,7 +595,7 @@ if st.session_state.analyzed:
     # ② 월별 청구요금 시트
     ws2 = wb.create_sheet("②월별_청구요금")
     ws2.merge_cells("A1:G1")
-    ws2["A1"] = f"월별 청구요금 [{tariff_choice} / {solar_flag} / {HEATING_TYPE_MAP[heating_type]}]"
+    ws2["A1"] = f"월별 청구요금 [{tariff_label} / {HEATING_TYPE_MAP[heating_type]}]"
     ws2["A1"].fill = hf; ws2["A1"].font = fw; ws2["A1"].alignment = center
     headers2 = ["월","기존 난방비(만원)","HP 청구요금(만원)","HP 청구요금(원)","월 절감액(만원)","Saving %","비고"]
     for ci, h in enumerate(headers2, 1):
@@ -608,12 +651,14 @@ if st.session_state.analyzed:
             for ci in range(1, 9): ws3.cell(row=r, column=ci).fill = pf
     for col in "ABCDEFGH": ws3.column_dimensions[col].width = 16
 
+    # 파일명용: 라벨에서 공백·괄호 제거 (Windows 호환)
+    fname_safe = tariff_label.replace(" ", "").replace("(", "_").replace(")", "")
     buf = io.BytesIO(); wb.save(buf)
     st.markdown("---")
     st.download_button(
         label="🚀 전문가용 수식 연동 정밀 엑셀 다운로드",
         data=buf.getvalue(),
-        file_name=f"Expert_Report_{s_reg}_{tariff_choice}_{solar_flag}.xlsx",
+        file_name=f"Expert_Report_{s_reg}_{fname_safe}.xlsx",
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         use_container_width=True,
     )
