@@ -709,7 +709,7 @@ def calc_dynamic_result(tariff_label, monthly_hp_kwh, monthly_appliance_kwh,
     }
 
 
-
+def simulate_18yr(net_capex_man, ann_heat_man, ann_hp_man, fuel_inflation_pct, elec_inflation_pct):
     """18년 누적 비용·순이익 시뮬레이션 (인플레이션 복리 적용).
 
     Returns: (years, gas_cum, hp_cum, net_profit, payback_year)
