@@ -1014,6 +1014,13 @@ st.markdown("""
         <span style='color:#94a3b8; font-size:0.9rem;'>절감액·투자 회수 기간이 한 눈에 보이고, 상세 결과는 엑셀로 다운받을 수 있습니다.</span></li>
     </ol>
   </div>
+
+  <div style='margin-top:22px; padding:14px 18px; background:#eff6ff; border-left:4px solid #3b82f6; border-radius:6px;'>
+    <p style='color:#1e3a8a; font-size:0.95rem; line-height:1.6; margin:0;'>
+      ℹ️ <b>참고</b>: 본 어플리케이션에서는 히트펌프의 설치 비용(CAPEX)을 <b>1,000만원</b>으로 설정하였습니다.
+      <span style='color:#475569; font-size:0.88rem;'>(국내 기업 평균 견적 기준 — 본체+설치비+부대공사 포함)</span>
+    </p>
+  </div>
 </div>
 """, unsafe_allow_html=True)
 
@@ -1071,10 +1078,6 @@ with col_sim:
         "태양광 용량 (kW)",
         value=0.0,
         help="태양광 설치 시 발전 용량을 입력해 주세요. (요금제 선택에서 '태양광 설치' 옵션을 함께 골라야 적용됩니다)"
-    )
-    st.info(
-        "ℹ️ 본 어플리케이션에서는 히트펌프의 설치 비용(CAPEX)을 **1,000만원**으로 설정하였습니다. "
-        "(국내 기업 평균 견적 기준 — 본체+설치비+부대공사 포함)"
     )
 
 with col_opt:
