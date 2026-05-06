@@ -142,17 +142,12 @@ TARIFF_LABEL_MAP = {
     "계시별 (태양광 설치)":   ("계시별", "태O"),
 }
 
-# ── CO₂ 배출 환산 계수 (1만원당 kgCO₂) ──
-# 출처: 환경부 온실가스 종합정보센터(GIR) 배출계수 + 2024년 평균 단가
-# - 도시가스: 8.0m³/만원 × 2.243 kgCO₂/m³ ≈ 18.0
-# - 등유:     6.7L/만원 × 2.690 kgCO₂/L ≈ 18.0
-# - LPG:      5.0kg/만원 × 3.000 kgCO₂/kg = 15.0
-# - 전기:     약 40kWh/만원 × 0.4242 kgCO₂/kWh ≈ 17.0 (한전 2023 그리드 평균)
-CO2_PER_MAN_FUEL = {
-    "도시가스(콘덴싱)": 18.0, "도시가스(일반)": 18.0,
-    "등유":            18.0, "LPG":           15.0,
-}
-CO2_PER_MAN_ELEC = 17.0
+# ── CO₂ 배출 환산 계수 ──
+# 출처: 엑셀 Sheet2 행 10 "기기 온실가스 배출계수(tCO2eq/MWh)"
+# 단위 동치: 1 tCO2eq/MWh = 1 kgCO2eq/kWh (계산 시 변환 불필요)
+# 적용 방식: 사용자의 실제 난방 에너지 수요(kWh) 또는 HP 전력 사용량(kWh)에 곱해 kgCO₂ 산출.
+# 이전 버전(만원당 kg 환산)보다 사용자 지역/기후존/COP가 자동 반영되어 정확합니다.
+# 실제 값은 load_tariff_xlsx()에서 동적 로드됨.
 
 # ── 환경 비유 환산 ──
 # 30년생 소나무 1그루: 연 약 6.6 kgCO₂ 흡수 (산림청)
@@ -283,6 +278,28 @@ def load_tariff_xlsx():
             "heating_share": float(ws_s2.cell(row=14, column=3).value or 0.85),
         }
 
+        # ── Sheet2 행 10 — 기기 온실가스 배출계수 (tCO2eq/MWh = kgCO2eq/kWh) ──
+        # 연료별 배출계수: 사용자의 실제 난방 에너지 수요(kWh)에 곱하면 kg 단위 CO₂ 배출량.
+        # HP 배출계수: 2025년 기준(현재 그리드)와 2038년 기준(미래 청정 그리드) 두 시점 제공.
+        # 검증: 표준 5582.5 kWh × 0.2185 = 1219.6 kg ≈ 1.22 t (Sheet2 행 65 col 3과 일치)
+        emission_factors_fuel = {
+            "도시가스(콘덴싱)": float(ws_s2.cell(row=10, column=3).value or 0),
+            "도시가스(일반)":   float(ws_s2.cell(row=10, column=4).value or 0),
+            "등유":            float(ws_s2.cell(row=10, column=5).value or 0),
+            "LPG":             float(ws_s2.cell(row=10, column=6).value or 0),
+        }
+        emission_factor_hp_2025 = float(ws_s2.cell(row=10, column=7).value or 0)
+        emission_factor_hp_2038 = float(ws_s2.cell(row=10, column=8).value or 0)
+
+        # ── Sheet2 행 65-82 — 18년 연간 온실가스 배출량 (tCO2eq, 표준가구 기준) ──
+        # 연료(콘덴싱/일반/등유/LPG)는 매년 동일, HP는 그리드 청정화로 매년 감소
+        # 사용자 가구는 scale 보정으로 환산 가능 (참고용 — 18년 시뮬레이션 등)
+        emission_18yr = {}
+        for fuel, col in [("도시가스(콘덴싱)", 3), ("도시가스(일반)", 4),
+                           ("등유", 5), ("LPG", 6), ("히트펌프", 7)]:
+            emission_18yr[fuel] = [float(ws_s2.cell(row=65+y, column=col).value or 0)
+                                    for y in range(18)]
+
         # ── Sheet3 — 광역시도별 월별 난방 비중 (17개 시도 + 전국) ──
         ws_s3 = wb["Sheet3"]
         region_ratios = {}
@@ -316,6 +333,10 @@ def load_tariff_xlsx():
             "region_ratios":  region_ratios,
             "appliance_kwh":  appliance_kwh,
             "solar_kwh":      solar_kwh_by_region,
+            "emission_factors_fuel":   emission_factors_fuel,
+            "emission_factor_hp_2025": emission_factor_hp_2025,
+            "emission_factor_hp_2038": emission_factor_hp_2038,
+            "emission_18yr":  emission_18yr,
         }, None
     except Exception as e:
         return None, str(e)
@@ -420,19 +441,35 @@ def get_hp_capacity_kw(h_size_pyung):
     return 16
 
 
-def calc_monthly_stats(monthly_ex_man, monthly_hp_man, fuel_key):
-    """월별 절감액·누적·절감률·CO₂ 한 번에 계산."""
-    co2_factor_fuel = CO2_PER_MAN_FUEL[fuel_key]
+def calc_monthly_stats(monthly_ex_man, monthly_hp_man,
+                       monthly_demand_kwh, monthly_hp_kwh,
+                       fuel_key, emission_factors_fuel, emission_factor_hp):
+    """월별 절감액·누적·절감률·CO₂ 한 번에 계산.
+
+    CO₂는 엑셀 Sheet2 행 10 배출계수(kgCO₂/kWh) × 월별 실제 kWh 사용량으로 산출.
+    이전 버전(만원당 환산) 대비 사용자의 실제 에너지 사용량을 반영한 정확한 값.
+
+    Args:
+        monthly_ex_man, monthly_hp_man:  월별 비용 (만원, 절감 비율 계산용)
+        monthly_demand_kwh:              월별 기존 보일러 난방 수요 (kWh)
+        monthly_hp_kwh:                  월별 HP 전력 사용량 (kWh)
+        fuel_key:                        연료 종류 (도시가스(콘덴싱)/일반/등유/LPG)
+        emission_factors_fuel:           연료별 배출계수 dict (kgCO₂/kWh)
+        emission_factor_hp:              HP 배출계수 (kgCO₂/kWh, 2025년 그리드)
+    """
+    factor_fuel = emission_factors_fuel[fuel_key]
     savings, cumulative, savings_pct, co2 = [], [], [], []
     cum = 0.0
-    for ex, hp in zip(monthly_ex_man, monthly_hp_man):
+    for ex, hp, demand_kwh, hp_kwh in zip(monthly_ex_man, monthly_hp_man,
+                                           monthly_demand_kwh, monthly_hp_kwh):
         sav = round(ex - hp, 2)
         cum += sav
         savings.append(sav)
         cumulative.append(round(cum, 2))
         # 비난방월(기존 난방비 0)은 비율 의미 없음 → "-"
         savings_pct.append(f"{round(sav/ex*100, 1)}%" if ex > 0 else "-")
-        co2.append(round(ex * co2_factor_fuel - hp * CO2_PER_MAN_ELEC, 1))
+        # CO₂ 절감 = 기존 보일러 배출 - HP 배출 (kg)
+        co2.append(round(demand_kwh * factor_fuel - hp_kwh * emission_factor_hp, 1))
     return {
         "savings":    savings,
         "cumulative": cumulative,
@@ -441,13 +478,23 @@ def calc_monthly_stats(monthly_ex_man, monthly_hp_man, fuel_key):
     }
 
 
-def calc_annual_co2_savings(ex_annual_man, hp_annual_man, fuel_key):
+def calc_annual_co2_savings(annual_demand_kwh, annual_hp_kwh, fuel_key,
+                             emission_factors_fuel, emission_factor_hp):
     """연간 CO₂ 절감량(kg) + 시민 친화 비유 환산.
+
+    엑셀 Sheet2 행 10 배출계수(kgCO₂/kWh) × 사용자 실제 연간 kWh로 산출.
+
+    Args:
+        annual_demand_kwh:      사용자 연간 난방 에너지 수요 (kWh)
+        annual_hp_kwh:          사용자 연간 HP 전력 사용량 (kWh)
+        fuel_key:               연료 종류
+        emission_factors_fuel:  연료별 배출계수 dict (kgCO₂/kWh)
+        emission_factor_hp:     HP 배출계수 (kgCO₂/kWh, 2025년 그리드)
 
     Returns: (co2_kg, trees, car_km)
     """
-    co2_ex = ex_annual_man * CO2_PER_MAN_FUEL[fuel_key]
-    co2_hp = hp_annual_man * CO2_PER_MAN_ELEC
+    co2_ex = annual_demand_kwh * emission_factors_fuel[fuel_key]
+    co2_hp = annual_hp_kwh     * emission_factor_hp
     co2_saving = max(0, co2_ex - co2_hp)
     trees  = round(co2_saving / TREE_KG_PER_YEAR)
     car_km = round(co2_saving / CAR_KG_PER_KM)
@@ -746,8 +793,13 @@ def build_excel_report(*, region, tariff_label, fuel_key,
                        scale, csv_jan_man, dynamic_cop, zone,
                        capex_man, use_subsidy_nat, use_subsidy_loc, net_capex_man,
                        ann_heat_base, ann_hp_op, result,
-                       monthly_ex_man, hdd_zone):
-    """3개 시트로 구성된 엑셀 리포트 생성 후 BytesIO 반환."""
+                       monthly_ex_man, hdd_zone,
+                       monthly_demand_kwh, monthly_hp_kwh,
+                       emission_factors_fuel, emission_factor_hp):
+    """3개 시트로 구성된 엑셀 리포트 생성 후 BytesIO 반환.
+
+    CO₂는 엑셀 Sheet2 행 10 배출계수(kgCO₂/kWh) × 사용자 실제 kWh로 산출.
+    """
     wb = Workbook()
 
     # 공통 스타일
@@ -814,8 +866,9 @@ def build_excel_report(*, region, tariff_label, fuel_key,
         cell.fill = fill_subhead; cell.font = font_bold
         cell.border = border_thin; cell.alignment = align_center
 
-    co2_factor_fuel = CO2_PER_MAN_FUEL[fuel_key]
+    factor_fuel = emission_factors_fuel[fuel_key]
     cum = 0.0
+    co2_total = 0.0
     for m in range(1, 13):
         r = m + 2
         ex      = monthly_ex_man[m-1]
@@ -823,7 +876,10 @@ def build_excel_report(*, region, tariff_label, fuel_key,
         sav     = round(ex - hp, 2)
         cum    += sav
         sav_pct = f"{round(sav/ex*100, 1)}%" if ex > 0 else "-"
-        co2     = round(ex * co2_factor_fuel - hp * CO2_PER_MAN_ELEC, 1)
+        # CO₂: Sheet2 행 10 배출계수 × 월별 실제 kWh
+        co2     = round(monthly_demand_kwh[m-1] * factor_fuel
+                        - monthly_hp_kwh[m-1] * emission_factor_hp, 1)
+        co2_total += co2
         note    = "난방월" if hdd_zone[m-1] > 0 else "비난방월"
 
         for ci, val in enumerate([f"{m}월", ex, hp, sav, sav_pct, round(cum, 2), co2, note], 1):
@@ -837,11 +893,9 @@ def build_excel_report(*, region, tariff_label, fuel_key,
 
     # 합계 행
     r_sum = 15
-    co2_total = round(result["ex_annual_man"] * co2_factor_fuel
-                      - result["hp_annual_man"] * CO2_PER_MAN_ELEC, 1)
     summary_vals = [
         "연간 합계", ann_heat_base, ann_hp_op, result["saving_man"],
-        f"{round(result['saving_ratio']*100, 1)}%", round(cum, 2), co2_total, "-"
+        f"{round(result['saving_ratio']*100, 1)}%", round(cum, 2), round(co2_total, 1), "-"
     ]
     for ci, val in enumerate(summary_vals, 1):
         cell = ws2.cell(row=r_sum, column=ci, value=val)
@@ -906,6 +960,10 @@ if excel_data:
     REGION_RATIOS = excel_data["region_ratios"] # Sheet3: 광역시도별 월별 난방 비중
     APPLIANCE_KWH = excel_data["appliance_kwh"] # 전기요금 시트: 가전 월별 평균 사용량 (전국, 12개)
     SOLAR_KWH     = excel_data["solar_kwh"]     # 전기요금 시트: 17개 시도 월별 1kW당 태양광 발전량
+    EMISSION_FACTORS_FUEL   = excel_data["emission_factors_fuel"]    # Sheet2 행 10: 연료별 배출계수 (kg/kWh)
+    EMISSION_FACTOR_HP_2025 = excel_data["emission_factor_hp_2025"]  # Sheet2 행 10 col 7: HP 2025년 배출계수
+    EMISSION_FACTOR_HP_2038 = excel_data["emission_factor_hp_2038"]  # Sheet2 행 10 col 8: HP 2038년 배출계수 (참고용)
+    EMISSION_18YR = excel_data["emission_18yr"] # Sheet2 행 65-82: 표준가구 18년 연간 배출량 (참고용)
 
 col_title, col_logo = st.columns([6, 1])
 with col_title:
@@ -1117,11 +1175,16 @@ if st.session_state.analyzed:
     hdd_zone = HDD_MONTHLY[zone]            # 비고 표시용 (난방월/비난방월 판단)
     jan_ratio = monthly_ratios[0] if monthly_ratios[0] > 0 else 1
     monthly_ex_man = [round(winter_heat_man * monthly_ratios[m-1] / jan_ratio, 2) for m in months]
-    monthly_stats  = calc_monthly_stats(monthly_ex_man, result["monthly_man"], fuel_key)
+    monthly_stats  = calc_monthly_stats(
+        monthly_ex_man, result["monthly_man"],
+        kwh["monthly_demand"], kwh["monthly_hp"],
+        fuel_key, EMISSION_FACTORS_FUEL, EMISSION_FACTOR_HP_2025
+    )
 
-    # 연간 CO₂ 절감 + 환경 비유
+    # 연간 CO₂ 절감 + 환경 비유 — Sheet2 행 10 배출계수 × 사용자 실제 kWh
     co2_saving_kg, trees, car_km = calc_annual_co2_savings(
-        result["ex_annual_man"], result["hp_annual_man"], fuel_key
+        kwh["annual_demand"], kwh["annual_hp"], fuel_key,
+        EMISSION_FACTORS_FUEL, EMISSION_FACTOR_HP_2025
     )
 
 
@@ -1251,8 +1314,10 @@ if st.session_state.analyzed:
             f"(예: 1월 {kwh['monthly_hp'][0]:.0f} kWh 사용 → 전체 가전과 합쳐 누진 단계 추정 가능)."
         )
         st.caption(
-            f"📊 CO₂는 환경부 GIR 배출계수와 평균 단가({fuel_key}: {CO2_PER_MAN_FUEL[fuel_key]}kg/만원, "
-            f"전기: {CO2_PER_MAN_ELEC}kg/만원) 기반 추정치입니다."
+            f"📊 **CO₂ 산출**: 엑셀 Sheet2 행 10 '기기 온실가스 배출계수(tCO2eq/MWh)' 기준 — "
+            f"{fuel_key}: {EMISSION_FACTORS_FUEL[fuel_key]:.4f} kg/kWh, "
+            f"히트펌프(2025년 그리드): {EMISSION_FACTOR_HP_2025:.4f} kg/kWh. "
+            f"사용자의 실제 월별 난방 수요·HP 전력량(kWh)에 곱해 산출한 정확한 값입니다."
         )
 
     # ─── 8-7. 18년 차트 ──────────────────────────────────────────────
@@ -1301,6 +1366,7 @@ if st.session_state.analyzed:
 | HP 연간 전기요금 | **{ann_hp_op}만원** | 엑셀 HP연합계 × 규모 보정 |
 | 지역 sCOP (참고) | **{dynamic_cop:.2f}** | 기후 존 ({zone}) 추정값 |
 | 월별 비중 출처 | **{REGION_NAME_MAP.get(region, '전국')}** | 엑셀 Sheet3 광역시도별 데이터 |
+| CO₂ 배출계수 | **{fuel_key} {EMISSION_FACTORS_FUEL[fuel_key]:.4f} / HP {EMISSION_FACTOR_HP_2025:.4f} kg/kWh** | 엑셀 Sheet2 행 10 |
         """)
 
     # ─── 8-9. 엑셀 다운로드 ──────────────────────────────────────────
@@ -1312,6 +1378,8 @@ if st.session_state.analyzed:
         capex_man=capex_man, use_subsidy_nat=use_subsidy_nat, use_subsidy_loc=use_subsidy_loc,
         net_capex_man=net_capex_man, ann_heat_base=ann_heat_base, ann_hp_op=ann_hp_op,
         result=result, monthly_ex_man=monthly_ex_man, hdd_zone=hdd_zone,
+        monthly_demand_kwh=kwh["monthly_demand"], monthly_hp_kwh=kwh["monthly_hp"],
+        emission_factors_fuel=EMISSION_FACTORS_FUEL, emission_factor_hp=EMISSION_FACTOR_HP_2025,
     )
 
     st.markdown("---")
