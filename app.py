@@ -1086,13 +1086,8 @@ with col_opt:
     use_subsidy_loc = st.checkbox(
         f"지자체 매칭 보조금 적용 ({SUBSIDY_LOCAL}만원)",
         value=is_southern,
-        disabled=not is_southern,
-        help="정부 보조금에 50% 매칭 — 2026년 현재 제주·경남·전남에서만 신청 가능합니다."
     )
-    if is_southern:
-        st.caption("✓ 현재 지역은 지자체 매칭 보조금 신청 가능 지역입니다.")
-    else:
-        st.caption(f"⚠️ {region}은 지자체 매칭 보조금 비대상 지역입니다 (체크 불가).")
+    st.caption("⚠️ 2026년 현재 제주/경남/전남만 지원 가능, 신청 전 확인 필수")
 
     st.markdown("---")
     st.markdown("**전기 요금제 선택**")
