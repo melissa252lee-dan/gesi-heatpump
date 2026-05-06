@@ -833,7 +833,7 @@ def build_excel_report(*, region, tariff_label, fuel_key,
         ("적용 데이터",      f"{tariff_label} / {fuel_key}",             "-",     "전기요금완료본.xlsx"),
         ("규모 보정 계수",   round(scale, 2),                            "배",    f"={winter_heat_man}÷{round(csv_jan_man, 2)}"),
         ("지역 sCOP",        dynamic_cop,                                "-",     f"기후 존 ({zone})"),
-        ("설비 CAPEX",       capex_man,                                  "만원",  "국내 기업 자료"),
+        ("설비 CAPEX",       capex_man,                                  "만원",  "앱 고정값 (국내 기업 평균)"),
         ("정부 보조금",      SUBSIDY_NATIONAL if use_subsidy_nat else 0, "만원",  "기후에너지환경부 2026"),
         ("지방 보조금",      SUBSIDY_LOCAL    if use_subsidy_loc else 0, "만원",  "정부 50% 매칭"),
         ("순 투자비",        net_capex_man,                              "만원",  "=CAPEX-보조금"),
@@ -1072,12 +1072,24 @@ with col_sim:
         value=0.0,
         help="태양광 설치 시 발전 용량을 입력해 주세요. (요금제 선택에서 '태양광 설치' 옵션을 함께 골라야 적용됩니다)"
     )
+    st.info(
+        "ℹ️ 본 어플리케이션에서는 히트펌프의 설치 비용(CAPEX)을 **1,000만원**으로 설정하였습니다. "
+        "(국내 기업 평균 견적 기준 — 본체+설치비+부대공사 포함)"
+    )
 
 with col_opt:
     use_subsidy_nat = st.checkbox(f"정부 보조금 적용 ({SUBSIDY_NATIONAL}만원)", value=True)
     is_southern    = region in SOUTHERN_REGIONS
-    use_subsidy_loc = st.checkbox(f"지자체 매칭 보조금 적용 ({SUBSIDY_LOCAL}만원)", value=is_southern)
-    st.caption("*2026년 현재 제주, 경남, 전남은 보조금 신청이 가능합니다.")
+    use_subsidy_loc = st.checkbox(
+        f"지자체 매칭 보조금 적용 ({SUBSIDY_LOCAL}만원)",
+        value=is_southern,
+        disabled=not is_southern,
+        help="정부 보조금에 50% 매칭 — 2026년 현재 제주·경남·전남에서만 신청 가능합니다."
+    )
+    if is_southern:
+        st.caption("✓ 현재 지역은 지자체 매칭 보조금 신청 가능 지역입니다.")
+    else:
+        st.caption(f"⚠️ {region}은 지자체 매칭 보조금 비대상 지역입니다 (체크 불가).")
 
     st.markdown("---")
     st.markdown("**전기 요금제 선택**")
@@ -1158,7 +1170,7 @@ if st.session_state.analyzed:
 
     # 보조금 및 투자비
     total_subsidy = (SUBSIDY_NATIONAL if use_subsidy_nat else 0) + (SUBSIDY_LOCAL if use_subsidy_loc else 0)
-    capex_man     = 1000  # 국내 기업 자료 (설치비 포함)
+    capex_man     = 1000  # 국내 기업 평균 견적 기준 — UI 안내문구 참조
     net_capex_man = max(0, capex_man - total_subsidy)
 
     # 18년 시뮬레이션
@@ -1477,7 +1489,7 @@ if st.session_state.analyzed:
 | 적용 요금제 | **{tariff_label}** | 전기요금완료본.xlsx |
 | 적용 난방 유형 | **{fuel_key}** | 사용자 선택 |
 | 규모 보정 계수 | **×{round(scale, 2)}** | 사용자 1월 난방비({winter_heat_man}만원) ÷ 엑셀 기준({csv_jan_man:.2f}만원) |
-| 설비 CAPEX | **{capex_man}만원** | 국내 기업 자료 (설치비 포함) |
+| 설비 CAPEX | **{capex_man}만원 (앱 고정값)** | 국내 기업 평균 견적 — 본체+설치비+부대공사 포함 |
 | 정부+지방 보조금 | **{total_subsidy}만원** | {subsidy_text} |
 | 순 투자비 | **{net_capex_man}만원** | CAPEX − 보조금 |
 | 기존 연간 난방비 | **{ann_heat_base}만원** | 엑셀 기존난방비 × 규모 보정 |
