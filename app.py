@@ -149,12 +149,6 @@ TARIFF_LABEL_MAP = {
 # 이전 버전(만원당 kg 환산)보다 사용자 지역/기후존/COP가 자동 반영되어 정확합니다.
 # 실제 값은 load_tariff_xlsx()에서 동적 로드됨.
 
-# ── 환경 비유 환산 ──
-# 30년생 소나무 1그루: 연 약 6.6 kgCO₂ 흡수 (산림청)
-# 승용차 1km 운행: 약 0.15 kgCO₂ 배출 (환경부 평균)
-TREE_KG_PER_YEAR = 6.6
-CAR_KG_PER_KM    = 0.15
-
 # ── Sheet2 (kWh 기반 물리 데이터) 행 매핑 ──
 # 표준 가구(중부2, 거창군 32평, 연 65만원) 기준의 월별 에너지 흐름.
 # 행 45-48: 월별 난방 에너지 수요(kWh) — 가스/등유/LPG 기존 보일러 사용 시
@@ -441,35 +435,31 @@ def get_hp_capacity_kw(h_size_pyung):
     return 16
 
 
-def calc_monthly_stats(monthly_ex_man, monthly_hp_man,
-                       monthly_demand_kwh, monthly_hp_kwh,
-                       fuel_key, emission_factors_fuel, emission_factor_hp):
+def calc_monthly_stats(monthly_ex_man, monthly_hp_man, monthly_ratios,
+                       annual_ex_kg, annual_hp_kg):
     """월별 절감액·누적·절감률·CO₂ 한 번에 계산.
 
-    CO₂는 엑셀 Sheet2 행 10 배출계수(kgCO₂/kWh) × 월별 실제 kWh 사용량으로 산출.
-    이전 버전(만원당 환산) 대비 사용자의 실제 에너지 사용량을 반영한 정확한 값.
+    CO₂는 엑셀 Sheet2 행 65 (연간 온실가스 배출량 tCO2eq) × 사용자 scale을
+    광역시도 월별 난방 비중(monthly_ratios)으로 안분.
 
     Args:
-        monthly_ex_man, monthly_hp_man:  월별 비용 (만원, 절감 비율 계산용)
-        monthly_demand_kwh:              월별 기존 보일러 난방 수요 (kWh)
-        monthly_hp_kwh:                  월별 HP 전력 사용량 (kWh)
-        fuel_key:                        연료 종류 (도시가스(콘덴싱)/일반/등유/LPG)
-        emission_factors_fuel:           연료별 배출계수 dict (kgCO₂/kWh)
-        emission_factor_hp:              HP 배출계수 (kgCO₂/kWh, 2025년 그리드)
+        monthly_ex_man, monthly_hp_man:  월별 비용 (만원)
+        monthly_ratios:                  광역시도 월별 비중 (합=1, Sheet3)
+        annual_ex_kg:                    사용자 연간 기존 보일러 배출량 (kg)
+        annual_hp_kg:                    사용자 연간 HP 배출량 (kg)
     """
-    factor_fuel = emission_factors_fuel[fuel_key]
+    annual_saving_kg = max(0, annual_ex_kg - annual_hp_kg)
     savings, cumulative, savings_pct, co2 = [], [], [], []
     cum = 0.0
-    for ex, hp, demand_kwh, hp_kwh in zip(monthly_ex_man, monthly_hp_man,
-                                           monthly_demand_kwh, monthly_hp_kwh):
+    for ex, hp, ratio in zip(monthly_ex_man, monthly_hp_man, monthly_ratios):
         sav = round(ex - hp, 2)
         cum += sav
         savings.append(sav)
         cumulative.append(round(cum, 2))
         # 비난방월(기존 난방비 0)은 비율 의미 없음 → "-"
         savings_pct.append(f"{round(sav/ex*100, 1)}%" if ex > 0 else "-")
-        # CO₂ 절감 = 기존 보일러 배출 - HP 배출 (kg)
-        co2.append(round(demand_kwh * factor_fuel - hp_kwh * emission_factor_hp, 1))
+        # 월별 CO₂ 절감 = 연간 절감 × 그 달 비중
+        co2.append(round(annual_saving_kg * ratio, 1))
     return {
         "savings":    savings,
         "cumulative": cumulative,
@@ -478,27 +468,38 @@ def calc_monthly_stats(monthly_ex_man, monthly_hp_man,
     }
 
 
-def calc_annual_co2_savings(annual_demand_kwh, annual_hp_kwh, fuel_key,
-                             emission_factors_fuel, emission_factor_hp):
-    """연간 CO₂ 절감량(kg) + 시민 친화 비유 환산.
+def calc_annual_co2_emissions(scale, fuel_key, emission_18yr, year_idx=0):
+    """연간 CO₂ 배출량 계산 — 엑셀 Sheet2 행 65~82 직접 사용.
 
-    엑셀 Sheet2 행 10 배출계수(kgCO₂/kWh) × 사용자 실제 연간 kWh로 산출.
+    행 65~82는 표준가구(연 65만원) 기준 18년치 연간 배출량(tCO2eq).
+    사용자 가구는 scale 보정으로 환산.
+    HP는 그리드 청정화로 매년 감소 (2026 0.73 t → 2043 0.03 t),
+    연료(가스/등유/LPG)는 매년 동일.
 
     Args:
-        annual_demand_kwh:      사용자 연간 난방 에너지 수요 (kWh)
-        annual_hp_kwh:          사용자 연간 HP 전력 사용량 (kWh)
-        fuel_key:               연료 종류
-        emission_factors_fuel:  연료별 배출계수 dict (kgCO₂/kWh)
-        emission_factor_hp:     HP 배출계수 (kgCO₂/kWh, 2025년 그리드)
+        scale:          사용자 가구 규모 보정 계수
+        fuel_key:       사용자 선택 연료 (도시가스(콘덴싱)/일반/등유/LPG)
+        emission_18yr:  Sheet2 행 65-82 데이터 dict (load_tariff_xlsx)
+        year_idx:       0=2026(현재), 1~17=2027~2043
 
-    Returns: (co2_kg, trees, car_km)
+    Returns:
+        dict {
+            "ex_kg":     사용자 연료 배출량 (kg)
+            "hp_kg":     HP 배출량 (kg)
+            "saving_kg": 절감량 (kg)
+            "by_fuel":   5개 항목 모두 dict {연료명: kg}  — 비교 표시용
+        }
     """
-    co2_ex = annual_demand_kwh * emission_factors_fuel[fuel_key]
-    co2_hp = annual_hp_kwh     * emission_factor_hp
-    co2_saving = max(0, co2_ex - co2_hp)
-    trees  = round(co2_saving / TREE_KG_PER_YEAR)
-    car_km = round(co2_saving / CAR_KG_PER_KM)
-    return co2_saving, trees, car_km
+    by_fuel = {fuel: emission_18yr[fuel][year_idx] * scale * 1000  # t → kg
+               for fuel in emission_18yr}
+    ex_kg = by_fuel[fuel_key]
+    hp_kg = by_fuel["히트펌프"]
+    return {
+        "ex_kg":     ex_kg,
+        "hp_kg":     hp_kg,
+        "saving_kg": max(0, ex_kg - hp_kg),
+        "by_fuel":   by_fuel,
+    }
 
 
 def calc_demand_kwh_sheet2(annual_cost_won, fuel_key, sheet2_params):
@@ -793,12 +794,11 @@ def build_excel_report(*, region, tariff_label, fuel_key,
                        scale, csv_jan_man, dynamic_cop, zone,
                        capex_man, use_subsidy_nat, use_subsidy_loc, net_capex_man,
                        ann_heat_base, ann_hp_op, result,
-                       monthly_ex_man, hdd_zone,
-                       monthly_demand_kwh, monthly_hp_kwh,
-                       emission_factors_fuel, emission_factor_hp):
+                       monthly_ex_man, hdd_zone, monthly_ratios, co2):
     """3개 시트로 구성된 엑셀 리포트 생성 후 BytesIO 반환.
 
-    CO₂는 엑셀 Sheet2 행 10 배출계수(kgCO₂/kWh) × 사용자 실제 kWh로 산출.
+    CO₂는 엑셀 Sheet2 행 65 (연간 온실가스 배출량 tCO2eq) × 사용자 scale 기준,
+    월별은 광역시도 월별 비중으로 안분.
     """
     wb = Workbook()
 
@@ -866,7 +866,7 @@ def build_excel_report(*, region, tariff_label, fuel_key,
         cell.fill = fill_subhead; cell.font = font_bold
         cell.border = border_thin; cell.alignment = align_center
 
-    factor_fuel = emission_factors_fuel[fuel_key]
+    annual_saving_kg = co2["saving_kg"]
     cum = 0.0
     co2_total = 0.0
     for m in range(1, 13):
@@ -876,13 +876,12 @@ def build_excel_report(*, region, tariff_label, fuel_key,
         sav     = round(ex - hp, 2)
         cum    += sav
         sav_pct = f"{round(sav/ex*100, 1)}%" if ex > 0 else "-"
-        # CO₂: Sheet2 행 10 배출계수 × 월별 실제 kWh
-        co2     = round(monthly_demand_kwh[m-1] * factor_fuel
-                        - monthly_hp_kwh[m-1] * emission_factor_hp, 1)
-        co2_total += co2
+        # 월별 CO₂ 절감 = 연간 절감(Sheet2 행 65 × scale) × 그 달 비중
+        co2_kg  = round(annual_saving_kg * monthly_ratios[m-1], 1)
+        co2_total += co2_kg
         note    = "난방월" if hdd_zone[m-1] > 0 else "비난방월"
 
-        for ci, val in enumerate([f"{m}월", ex, hp, sav, sav_pct, round(cum, 2), co2, note], 1):
+        for ci, val in enumerate([f"{m}월", ex, hp, sav, sav_pct, round(cum, 2), co2_kg, note], 1):
             ws2.cell(row=r, column=ci, value=val).border = border_thin
         # 절감 관련 셀 초록색 강조
         for ci in (4, 6, 7):
@@ -1175,16 +1174,13 @@ if st.session_state.analyzed:
     hdd_zone = HDD_MONTHLY[zone]            # 비고 표시용 (난방월/비난방월 판단)
     jan_ratio = monthly_ratios[0] if monthly_ratios[0] > 0 else 1
     monthly_ex_man = [round(winter_heat_man * monthly_ratios[m-1] / jan_ratio, 2) for m in months]
-    monthly_stats  = calc_monthly_stats(
-        monthly_ex_man, result["monthly_man"],
-        kwh["monthly_demand"], kwh["monthly_hp"],
-        fuel_key, EMISSION_FACTORS_FUEL, EMISSION_FACTOR_HP_2025
-    )
+    # 연간 CO₂ 배출량 — 엑셀 Sheet2 행 65 (2026년) × 사용자 scale 보정
+    co2 = calc_annual_co2_emissions(scale, fuel_key, EMISSION_18YR, year_idx=0)
 
-    # 연간 CO₂ 절감 + 환경 비유 — Sheet2 행 10 배출계수 × 사용자 실제 kWh
-    co2_saving_kg, trees, car_km = calc_annual_co2_savings(
-        kwh["annual_demand"], kwh["annual_hp"], fuel_key,
-        EMISSION_FACTORS_FUEL, EMISSION_FACTOR_HP_2025
+    # 월별 CO₂는 연간 배출량을 광역시도 월별 비중으로 안분
+    monthly_stats = calc_monthly_stats(
+        monthly_ex_man, result["monthly_man"], monthly_ratios,
+        co2["ex_kg"], co2["hp_kg"]
     )
 
 
@@ -1242,15 +1238,66 @@ if st.session_state.analyzed:
         delta=f"{round(result['saving_ratio'] * 100)}% 절감",
     )
 
-    # ─── 8-4. 환경 기여 박스 ──────────────────────────────────────────
+    # ─── 8-4. 환경 기여 박스 (Sheet2 행 65 기반) ─────────────────────
+    # 사용자 입력 기준 — 선택 연료 vs HP 연간 배출량 + 5개 에너지원 비교
+    by_fuel_rows = ""
+    fuel_display = {
+        "도시가스(콘덴싱)": "도시가스 (콘덴싱)",
+        "도시가스(일반)":   "도시가스 (일반)",
+        "등유":            "등유",
+        "LPG":             "LPG",
+        "히트펌프":         "히트펌프 (전환 시)",
+    }
+    for f, label in fuel_display.items():
+        kg = co2["by_fuel"][f]
+        is_current = (f == fuel_key)
+        is_hp      = (f == "히트펌프")
+        if is_current:
+            row_style = "background:#fef3c7; font-weight:700;"
+            note = " ← 현재 난방"
+        elif is_hp:
+            row_style = "background:#dbeafe; font-weight:700;"
+            note = " ← 전환 후"
+        else:
+            row_style = ""
+            note = ""
+        by_fuel_rows += (
+            f"<tr style='{row_style}'>"
+            f"<td style='padding:6px 12px;'>{label}{note}</td>"
+            f"<td style='padding:6px 12px; text-align:right;'>{kg:,.0f} kg</td>"
+            f"<td style='padding:6px 12px; text-align:right; color:#64748b;'>({kg/1000:.2f} t)</td>"
+            f"</tr>"
+        )
+
     st.markdown(f"""
 <div class='saving-box'>
-  <p class='saving-title'>🌳 우리 가족의 1년 환경 기여</p>
-  <p class='saving-sub'>
-    히트펌프 전환 시 연간 약 <b>{co2_saving_kg:,.0f} kgCO₂</b>를 줄일 수 있어요.
-    <br>
-    이는 🌲 <b>30년생 소나무 약 {trees:,}그루</b>가 1년 동안 흡수하는 양이거나,
-    🚗 <b>자동차로 약 {car_km:,} km</b>를 운행할 때 발생하는 배출량과 같습니다.
+  <p class='saving-title'>🌱 우리 가족의 1년 온실가스 배출량</p>
+  <p class='saving-sub' style='margin-bottom:12px;'>
+    입력하신 정보(1월 난방비 {winter_heat_man}만원, {region}) 기준으로
+    엑셀 Sheet2 행 65 배출량 데이터를 적용한 결과입니다.
+  </p>
+  <table style='width:100%; border-collapse:collapse; font-size:0.95rem; color:#166534;'>
+    <thead>
+      <tr style='border-bottom:2px solid #86efac;'>
+        <th style='padding:6px 12px; text-align:left;'>에너지원</th>
+        <th style='padding:6px 12px; text-align:right;'>연간 배출량</th>
+        <th style='padding:6px 12px; text-align:right;'>(tCO₂eq)</th>
+      </tr>
+    </thead>
+    <tbody>
+      {by_fuel_rows}
+    </tbody>
+    <tfoot>
+      <tr style='border-top:2px solid #86efac; font-weight:700;'>
+        <td style='padding:8px 12px;'>연간 절감 효과</td>
+        <td style='padding:8px 12px; text-align:right;'>{co2['saving_kg']:,.0f} kg</td>
+        <td style='padding:8px 12px; text-align:right; color:#166534;'>({co2['saving_kg']/1000:.2f} t)</td>
+      </tr>
+    </tfoot>
+  </table>
+  <p style='font-size:0.82rem; color:#64748b; margin:10px 0 0 0; line-height:1.5;'>
+    * HP 배출량은 난방+냉방+온수 등 HP의 모든 용도 전기 사용분 포함 기준 (Sheet2 행 65, 2026년 그리드).
+    18년에 걸쳐 그리드 청정화로 HP 배출량은 점차 감소합니다 (2043년 0.03 t).
   </p>
 </div>
 """, unsafe_allow_html=True)
@@ -1314,10 +1361,9 @@ if st.session_state.analyzed:
             f"(예: 1월 {kwh['monthly_hp'][0]:.0f} kWh 사용 → 전체 가전과 합쳐 누진 단계 추정 가능)."
         )
         st.caption(
-            f"📊 **CO₂ 산출**: 엑셀 Sheet2 행 10 '기기 온실가스 배출계수(tCO2eq/MWh)' 기준 — "
-            f"{fuel_key}: {EMISSION_FACTORS_FUEL[fuel_key]:.4f} kg/kWh, "
-            f"히트펌프(2025년 그리드): {EMISSION_FACTOR_HP_2025:.4f} kg/kWh. "
-            f"사용자의 실제 월별 난방 수요·HP 전력량(kWh)에 곱해 산출한 정확한 값입니다."
+            f"📊 **CO₂ 산출**: 엑셀 Sheet2 행 65 '연간 온실가스 배출량(tCO2eq)' (2026년 기준) × "
+            f"가구 규모 보정(×{round(scale, 2)}) — 사용자 연료({fuel_key}) 연간 {co2['ex_kg']:,.0f} kg, "
+            f"HP 전환 시 {co2['hp_kg']:,.0f} kg. 월별은 광역시도 난방 비중으로 안분."
         )
 
     # ─── 8-7. 18년 차트 ──────────────────────────────────────────────
@@ -1347,6 +1393,78 @@ if st.session_state.analyzed:
             use_container_width=True
         )
 
+    # ─── 8-7-2. 18년 환경 효과 (Sheet2 행 65~82 활용) ─────────────────
+    # 그리드 청정화로 HP 배출량이 매년 감소 — 2026년 vs 2043년 효과 비교
+    st.markdown('<div class="section-title">🌍 18년 환경 효과 (그리드 청정화 반영)</div>',
+                unsafe_allow_html=True)
+
+    # 18년치 배출량 — Sheet2 행 65~82 × 사용자 scale (kg 단위)
+    years_18 = list(range(1, 19))
+    co2_18_ex = [EMISSION_18YR[fuel_key][y] * scale * 1000 for y in range(18)]
+    co2_18_hp = [EMISSION_18YR["히트펌프"][y] * scale * 1000 for y in range(18)]
+    co2_18_save = [ex - hp for ex, hp in zip(co2_18_ex, co2_18_hp)]
+    co2_18_cum, _cum = [], 0.0
+    for s in co2_18_save:
+        _cum += s
+        co2_18_cum.append(round(_cum, 0))
+    total_18yr_kg = co2_18_cum[-1]
+    hp_reduction_pct = (1 - co2_18_hp[-1] / co2_18_hp[0]) * 100 if co2_18_hp[0] > 0 else 0
+
+    # 누적 효과 강조 박스
+    st.markdown(f"""
+<div class='saving-box'>
+  <p class='saving-title'>🌍 18년 누적 효과 — 총 {total_18yr_kg:,.0f} kgCO₂ ({total_18yr_kg/1000:.1f} 톤) 감축</p>
+  <p class='saving-sub'>
+    재생에너지 비중 확대로 그리드(전기) 자체가 청정해지면서 <b>HP 배출량은 매년 감소</b>합니다:
+    <br>
+    <b>2026년 {co2_18_hp[0]:,.0f} kg → 2043년 {co2_18_hp[-1]:,.0f} kg</b>
+    (약 {hp_reduction_pct:.0f}% 감소).
+    반면 가스·등유·LPG 보일러는 연소 시점에서 배출하므로 매년 동일합니다.
+  </p>
+</div>
+""", unsafe_allow_html=True)
+
+    # 두 개 차트 — 연간 추이 / 누적 절감
+    g3, g4 = st.columns(2)
+    with g3:
+        st.write("**연간 CO₂ 배출량 추이**")
+        df_emit = pd.DataFrame({
+            "연차": years_18 + years_18,
+            "kg":  co2_18_ex + co2_18_hp,
+            "구분": [f"기존 ({fuel_key})"] * 18 + ["HP (그리드 청정화)"] * 18,
+        })
+        st.altair_chart(
+            alt.Chart(df_emit).mark_line(point=True, strokeWidth=2.5).encode(
+                x=alt.X("연차:O", title="연차"),
+                y=alt.Y("kg:Q", title="연간 배출량 (kg)"),
+                color=alt.Color("구분:N", scale=alt.Scale(
+                    domain=[f"기존 ({fuel_key})", "HP (그리드 청정화)"],
+                    range=["#f87171", "#60a5fa"]
+                ), legend=alt.Legend(orient="top", title=None)),
+                tooltip=["연차", "구분", "kg"],
+            ).properties(height=280),
+            use_container_width=True
+        )
+    with g4:
+        st.write("**누적 CO₂ 절감량**")
+        df_cum_co2 = pd.DataFrame({
+            "연차": years_18,
+            "누적 절감(kg)": co2_18_cum,
+        })
+        st.altair_chart(
+            alt.Chart(df_cum_co2).mark_area(opacity=0.55, color="#86efac").encode(
+                x=alt.X("연차:O", title="연차"),
+                y=alt.Y("누적 절감(kg):Q"),
+                tooltip=["연차", "누적 절감(kg)"],
+            ).properties(height=280),
+            use_container_width=True
+        )
+
+    st.caption(
+        "📊 데이터 출처: 엑셀 Sheet2 행 65~82 '연간 온실가스 배출량(tCO2eq)' × 사용자 가구 규모 보정. "
+        "HP 배출계수는 행 10의 2025년(0.131 kg/kWh) → 2038년(0.042 kg/kWh) 그리드 청정화를 반영합니다."
+    )
+
     # ─── 8-8. 가정값 상세 ────────────────────────────────────────────
     with st.expander("📋 적용된 계산 가정값 및 출처"):
         subsidy_text = ("정부 560 + 지방 280" if use_subsidy_nat and use_subsidy_loc
@@ -1366,7 +1484,8 @@ if st.session_state.analyzed:
 | HP 연간 전기요금 | **{ann_hp_op}만원** | 엑셀 HP연합계 × 규모 보정 |
 | 지역 sCOP (참고) | **{dynamic_cop:.2f}** | 기후 존 ({zone}) 추정값 |
 | 월별 비중 출처 | **{REGION_NAME_MAP.get(region, '전국')}** | 엑셀 Sheet3 광역시도별 데이터 |
-| CO₂ 배출계수 | **{fuel_key} {EMISSION_FACTORS_FUEL[fuel_key]:.4f} / HP {EMISSION_FACTOR_HP_2025:.4f} kg/kWh** | 엑셀 Sheet2 행 10 |
+| CO₂ 출처 | **{fuel_key} {co2['ex_kg']:,.0f} / HP {co2['hp_kg']:,.0f} kg** | 엑셀 Sheet2 행 65 (2026년) × 규모 보정 |
+| 18년 누적 CO₂ 절감 | **{total_18yr_kg:,.0f} kg ({total_18yr_kg/1000:.1f} t)** | 엑셀 Sheet2 행 65~82 × 규모 보정 |
         """)
 
     # ─── 8-9. 엑셀 다운로드 ──────────────────────────────────────────
@@ -1378,8 +1497,7 @@ if st.session_state.analyzed:
         capex_man=capex_man, use_subsidy_nat=use_subsidy_nat, use_subsidy_loc=use_subsidy_loc,
         net_capex_man=net_capex_man, ann_heat_base=ann_heat_base, ann_hp_op=ann_hp_op,
         result=result, monthly_ex_man=monthly_ex_man, hdd_zone=hdd_zone,
-        monthly_demand_kwh=kwh["monthly_demand"], monthly_hp_kwh=kwh["monthly_hp"],
-        emission_factors_fuel=EMISSION_FACTORS_FUEL, emission_factor_hp=EMISSION_FACTOR_HP_2025,
+        monthly_ratios=monthly_ratios, co2=co2,
     )
 
     st.markdown("---")
