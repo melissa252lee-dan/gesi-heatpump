@@ -1164,7 +1164,7 @@ if st.session_state.analyzed:
     }).melt("월", var_name="구분", value_name="금액(만원)")
 
     chart = alt.Chart(df_chart).mark_bar().encode(
-        x=alt.X("월:O", sort=[f"{m}월" for m in months]),
+        x=alt.X("월:O", sort=[f"{m}월" for m in months], axis=alt.Axis(labelAngle=0)),
         y=alt.Y("금액(만원):Q"),
         color=alt.Color("구분:N", scale=alt.Scale(
             domain=["기존 난방비(만원)", "HP 난방요금(만원)"],
@@ -1172,7 +1172,7 @@ if st.session_state.analyzed:
         ), legend=alt.Legend(orient="top", title=None)),
         xOffset="구분:N",
         tooltip=["월", "구분", "금액(만원)"],
-    ).properties(height=280, title="월별 기존 난방비 vs HP 난방요금")
+    ).properties(height=380, title="월별 기존 난방비 vs HP 난방요금")
     st.altair_chart(chart, use_container_width=True)
 
     # ─── 8-6. 월별 상세 테이블 ────────────────────────────────────────
@@ -1201,17 +1201,19 @@ if st.session_state.analyzed:
             f"(예: 1월 {kwh['monthly_hp'][0]:.0f} kWh 사용 → 전체 가전과 합쳐 누진 단계 추정 가능)."
         )
 
-    # ─── 8-7. 15년 차트 ──────────────────────────────────────────────
-    st.markdown('<div class="section-title">📈 15년 장기 시뮬레이션</div>', unsafe_allow_html=True)
+    # ─── 8-7. 장기 차트 ──────────────────────────────────────────────
+    st.markdown('<div class="section-title">📈 장기 시뮬레이션</div>', unsafe_allow_html=True)
     g1, g2 = st.columns(2)
     with g1:
-        st.write("**15년 누적 비용 흐름**")
+        st.write("**누적 비용 흐름**")
         df_cum = pd.DataFrame({"연도": years, "기존": gas_cum, "HP": hp_cum}) \
                    .melt("연도", var_name="시나리오", value_name="비용")
         st.altair_chart(
             alt.Chart(df_cum).mark_area(opacity=0.5).encode(
-                x="연도:O", y="비용:Q", color="시나리오:N"
-            ),
+                x=alt.X("연도:O", axis=alt.Axis(labelAngle=0)),
+                y=alt.Y("비용:Q"),
+                color=alt.Color("시나리오:N"),
+            ).properties(height=380),
             use_container_width=True
         )
     with g2:
@@ -1223,14 +1225,16 @@ if st.session_state.analyzed:
         })
         st.altair_chart(
             alt.Chart(df_profit).mark_bar().encode(
-                x="연도:O", y="순수익:Q", color="상태:N"
-            ),
+                x=alt.X("연도:O", axis=alt.Axis(labelAngle=0)),
+                y=alt.Y("순수익:Q"),
+                color=alt.Color("상태:N"),
+            ).properties(height=380),
             use_container_width=True
         )
 
-    # ─── 8-7-2. 15년 환경 효과 (Sheet2 행 65~79 활용 — 2026~2040) ────
+    # ─── 8-7-2. 환경 효과 (Sheet2 행 65~79 활용 — 2026~2040) ────
     # 그리드 청정화로 HP 배출량이 매년 감소 — 2026년 vs 2040년 효과 비교
-    st.markdown('<div class="section-title">🌍 15년 환경 효과 (그리드 청정화 반영)</div>',
+    st.markdown('<div class="section-title">🌍 환경 효과 (그리드 청정화 반영)</div>',
                 unsafe_allow_html=True)
 
     # 15년치 배출량 — 엑셀 Sheet2 행 65~79 값을 그대로 사용 (kg 단위)
@@ -1248,7 +1252,7 @@ if st.session_state.analyzed:
     # 누적 효과 강조 박스
     st.markdown(f"""
 <div class='saving-box'>
-  <p class='saving-title'>🌍 15년 누적 효과 — 총 {total_15yr_kg:,.0f} kgCO₂ ({total_15yr_kg/1000:.1f} 톤) 감축</p>
+  <p class='saving-title'>🌍 누적 효과 — 총 {total_15yr_kg:,.0f} kgCO₂ ({total_15yr_kg/1000:.1f} 톤) 감축</p>
   <p class='saving-sub'>
     재생에너지 비중 확대로 그리드(전기) 자체가 청정해지면서 <b>HP 배출량은 매년 감소</b>합니다:
     <br>
@@ -1268,16 +1272,33 @@ if st.session_state.analyzed:
             "kg":  co2_15_ex + co2_15_hp,
             "구분": [f"기존 ({fuel_key})"] * 15 + ["HP (그리드 청정화)"] * 15,
         })
+        # 매년 두 에너지원 사이 차이를 라벨로 표시 (중간점 위치)
+        df_gap = pd.DataFrame({
+            "연차": years_15,
+            "차이(kg)": co2_15_save,
+            "중간점":  [(ex + hp) / 2 for ex, hp in zip(co2_15_ex, co2_15_hp)],
+        })
+        line_layer = alt.Chart(df_emit).mark_line(point=True, strokeWidth=2.5).encode(
+            x=alt.X("연차:O", title="연차", axis=alt.Axis(labelAngle=0)),
+            y=alt.Y("kg:Q", title="연간 배출량 (kg)"),
+            color=alt.Color("구분:N", scale=alt.Scale(
+                domain=[f"기존 ({fuel_key})", "HP (그리드 청정화)"],
+                range=["#f87171", "#60a5fa"]
+            ), legend=alt.Legend(orient="top", title=None)),
+            tooltip=["연차", "구분", "kg"],
+        )
+        gap_text = alt.Chart(df_gap).mark_text(
+            fontWeight="bold",
+            fontSize=11,
+            color="#16a34a",
+        ).encode(
+            x=alt.X("연차:O"),
+            y=alt.Y("중간점:Q"),
+            text=alt.Text("차이(kg):Q", format=",.0f"),
+            tooltip=[alt.Tooltip("연차"), alt.Tooltip("차이(kg):Q", format=",.0f")],
+        )
         st.altair_chart(
-            alt.Chart(df_emit).mark_line(point=True, strokeWidth=2.5).encode(
-                x=alt.X("연차:O", title="연차"),
-                y=alt.Y("kg:Q", title="연간 배출량 (kg)"),
-                color=alt.Color("구분:N", scale=alt.Scale(
-                    domain=[f"기존 ({fuel_key})", "HP (그리드 청정화)"],
-                    range=["#f87171", "#60a5fa"]
-                ), legend=alt.Legend(orient="top", title=None)),
-                tooltip=["연차", "구분", "kg"],
-            ).properties(height=280),
+            (line_layer + gap_text).properties(height=380),
             use_container_width=True
         )
     with g4:
@@ -1288,10 +1309,10 @@ if st.session_state.analyzed:
         })
         st.altair_chart(
             alt.Chart(df_cum_co2).mark_area(opacity=0.55, color="#86efac").encode(
-                x=alt.X("연차:O", title="연차"),
+                x=alt.X("연차:O", title="연차", axis=alt.Axis(labelAngle=0)),
                 y=alt.Y("누적 절감(kg):Q"),
                 tooltip=["연차", "누적 절감(kg)"],
-            ).properties(height=280),
+            ).properties(height=380),
             use_container_width=True
         )
 
