@@ -23,33 +23,66 @@ st.set_page_config(page_title="히트펌프 경제성 간이 계산기", layout=
 st.markdown("""
 <style>
 @import url('https://cdn.jsdelivr.net/gh/orioncactus/pretendard/dist/web/static/pretendard.css');
+
+:root {
+    /* Surface / 배경 톤 */
+    --bg-canvas:        #fafaf9;   /* 전체 배경 */
+    --bg-surface:       #ffffff;   /* 카드 */
+    --bg-soft:          #f5f5f4;   /* 옅은 회색 표면 */
+    --bg-sage:          #f0fdf4;   /* 세이지 — saving-box 기본 */
+    --bg-teal:          #e6f4f1;   /* 옅은 틸 — efficiency box */
+    --bg-amber:         #fef7e6;   /* 옅은 골드 — 강조행 */
+
+    /* Border */
+    --border-subtle:    #e7e5e4;   /* stone-200 */
+    --border-medium:    #d6d3d1;   /* stone-300 */
+    --border-sage:      #a7d4be;   /* sage 200 */
+    --border-teal:      #99d4c8;   /* teal 200 */
+
+    /* Text */
+    --text-primary:     #1c1917;   /* stone-900 */
+    --text-secondary:   #44403c;   /* stone-700 */
+    --text-muted:       #78716c;   /* stone-500 */
+
+    /* Accent */
+    --accent-emerald:   #047857;   /* 절감/긍정 */
+    --accent-emerald-d: #064e3b;   /* 더 진한 강조 */
+    --accent-teal:      #0f766e;   /* HP/대안 */
+    --accent-clay:      #9a3412;   /* 가스/기존 */
+    --accent-slate:     #475569;   /* 메타데이터 배지 */
+
+    /* Elevation */
+    --shadow-sm:        0 1px 2px rgba(28,25,23,0.04), 0 1px 3px rgba(28,25,23,0.06);
+    --shadow-md:        0 2px 4px rgba(28,25,23,0.04), 0 4px 12px rgba(28,25,23,0.08);
+}
+
 * { font-family: 'Pretendard', sans-serif; }
 
 /* 박스·타이틀 */
-.info-box      { background:#f8fafc; border:1px solid #e2e8f0; border-radius:12px; padding:28px; margin-bottom:35px; }
-.info-title    { color:#0f172a; font-size:1.25rem; font-weight:700; margin-bottom:15px; margin-top:0; }
-.info-text     { color:#475569; font-size:1.0rem; line-height:1.7; margin-bottom:0; }
-.section-title { color:#1e293b; font-weight:700; font-size:1.3rem; margin-top:40px; margin-bottom:16px; border-bottom:2px solid #cbd5e1; padding-bottom:8px; }
-.help-text     { color:#64748b; font-size:0.85rem; margin-bottom:12px; line-height:1.4; }
+.info-box      { background:var(--bg-surface); border:1px solid var(--border-subtle); border-radius:14px; padding:28px 32px; margin-bottom:36px; box-shadow:var(--shadow-sm); }
+.info-title    { color:var(--text-primary); font-size:1.25rem; font-weight:700; margin-bottom:14px; margin-top:0; letter-spacing:-0.01em; }
+.info-text     { color:var(--text-secondary); font-size:1.0rem; line-height:1.75; margin-bottom:0; }
+.section-title { color:var(--text-primary); font-weight:700; font-size:1.3rem; margin-top:44px; margin-bottom:18px; border-bottom:1px solid var(--border-subtle); padding-bottom:10px; letter-spacing:-0.01em; }
+.help-text     { color:var(--text-muted); font-size:0.85rem; margin-bottom:12px; line-height:1.5; }
 
-/* 환경 기여 박스 */
-.saving-box    { background:#f0fdf4; border:2px solid #86efac; border-radius:12px; padding:20px 24px; margin:16px 0; }
-.saving-title  { color:#15803d; font-size:1.1rem; font-weight:700; margin-bottom:4px; }
-.saving-sub    { color:#166534; font-size:0.95rem; line-height:1.65; }
+/* 환경 기여 박스 (기본 = sage) */
+.saving-box    { background:var(--bg-sage); border:1px solid var(--border-sage); border-radius:14px; padding:22px 26px; margin:16px 0; box-shadow:var(--shadow-sm); }
+.saving-title  { color:var(--accent-emerald-d); font-size:1.1rem; font-weight:700; margin-bottom:6px; letter-spacing:-0.005em; }
+.saving-sub    { color:var(--accent-emerald); font-size:0.95rem; line-height:1.7; }
 
-/* 배지 (요금제·난방·규모 표시) */
-.tariff-badge  { display:inline-block; background:#dbeafe; color:#1e40af; padding:4px 10px; border-radius:6px; font-size:0.85rem; font-weight:600; margin-right:6px; }
-.solar-badge-x { display:inline-block; background:#fef3c7; color:#92400e; padding:4px 10px; border-radius:6px; font-size:0.85rem; font-weight:600; margin-right:6px; }
-.solar-badge-o { display:inline-block; background:#dcfce7; color:#15803d; padding:4px 10px; border-radius:6px; font-size:0.85rem; font-weight:600; margin-right:6px; }
+/* 배지 (요금제·난방·규모 표시) — 차분한 슬레이트 톤 */
+.tariff-badge  { display:inline-block; background:var(--bg-soft); color:var(--accent-slate); border:1px solid var(--border-subtle); padding:4px 11px; border-radius:8px; font-size:0.85rem; font-weight:600; margin-right:6px; }
+.solar-badge-x { display:inline-block; background:var(--bg-amber); color:#854d0e; border:1px solid #fde68a; padding:4px 11px; border-radius:8px; font-size:0.85rem; font-weight:600; margin-right:6px; }
+.solar-badge-o { display:inline-block; background:var(--bg-sage); color:var(--accent-emerald-d); border:1px solid var(--border-sage); padding:4px 11px; border-radius:8px; font-size:0.85rem; font-weight:600; margin-right:6px; }
 
-/* 호버 툴팁 — 배지 위에 마우스를 올리면 상세 설명 표시 */
+/* 호버 툴팁 */
 .has-tooltip { position:relative; cursor:help; }
 .has-tooltip::after {
     content: attr(data-tooltip);
     position: absolute;
     bottom: calc(100% + 10px); left: 50%;
     transform: translateX(-50%);
-    background: #1e293b; color: #ffffff;
+    background: var(--text-primary); color: #ffffff;
     padding: 10px 14px; border-radius: 8px;
     font-size: 0.82rem; font-weight: 400;
     width: 300px; white-space: normal;
@@ -58,7 +91,7 @@ st.markdown("""
     pointer-events: none;
     transition: opacity 0.2s, visibility 0.2s;
     z-index: 1000;
-    box-shadow: 0 4px 14px rgba(0,0,0,0.18);
+    box-shadow: var(--shadow-md);
 }
 .has-tooltip::before {
     content: '';
@@ -66,7 +99,7 @@ st.markdown("""
     bottom: calc(100% + 4px); left: 50%;
     transform: translateX(-50%);
     border: 6px solid transparent;
-    border-top-color: #1e293b;
+    border-top-color: var(--text-primary);
     opacity: 0; visibility: hidden;
     pointer-events: none;
     transition: opacity 0.2s, visibility 0.2s;
@@ -850,10 +883,10 @@ st.markdown("""
     </ol>
   </div>
 
-  <div style='margin-top:22px; padding:14px 18px; background:#eff6ff; border-left:4px solid #3b82f6; border-radius:6px;'>
-    <p style='color:#1e3a8a; font-size:0.95rem; line-height:1.6; margin:0;'>
+  <div style='margin-top:22px; padding:14px 18px; background:#e6f4f1; border-left:3px solid #0f766e; border-radius:8px;'>
+    <p style='color:#134e4a; font-size:0.95rem; line-height:1.6; margin:0;'>
       ℹ️ <b>참고</b>: 본 어플리케이션에서는 히트펌프의 설치 비용(CAPEX)을 <b>1,000만원</b>으로 설정하였습니다.
-      <span style='color:#475569; font-size:0.88rem;'>(국내 기업 평균 견적 기준 — 본체+설치비+부대공사 포함)</span>
+      <span style='color:#78716c; font-size:0.88rem;'>(국내 기업 평균 견적 기준 — 본체+설치비+부대공사 포함)</span>
     </p>
   </div>
 </div>
@@ -1113,10 +1146,10 @@ if st.session_state.analyzed:
         is_current = (f == fuel_key)
         is_hp      = (f == "히트펌프")
         if is_current:
-            row_style = "background:#fef3c7; font-weight:700;"
+            row_style = "background:#fef7e6; font-weight:700;"
             note = " ← 현재 난방"
         elif is_hp:
-            row_style = "background:#dbeafe; font-weight:700;"
+            row_style = "background:#e6f4f1; font-weight:700;"
             note = " ← 전환 후"
         else:
             row_style = ""
@@ -1125,7 +1158,7 @@ if st.session_state.analyzed:
             f"<tr style='{row_style}'>"
             f"<td style='padding:6px 12px;'>{label}{note}</td>"
             f"<td style='padding:6px 12px; text-align:right;'>{kg:,.0f} kg</td>"
-            f"<td style='padding:6px 12px; text-align:right; color:#64748b;'>({kg/1000:.2f} t)</td>"
+            f"<td style='padding:6px 12px; text-align:right; color:#78716c;'>({kg/1000:.2f} t)</td>"
             f"</tr>"
         )
 
@@ -1135,9 +1168,9 @@ if st.session_state.analyzed:
   <p class='saving-sub' style='margin-bottom:12px;'>
     입력하신 정보(1월 난방비 {winter_heat_man}만원, {region}) 기준 추정 결과입니다.
   </p>
-  <table style='width:100%; border-collapse:collapse; font-size:0.95rem; color:#166534;'>
+  <table style='width:100%; border-collapse:collapse; font-size:0.95rem; color:#064e3b;'>
     <thead>
-      <tr style='border-bottom:2px solid #86efac;'>
+      <tr style='border-bottom:1px solid #a7d4be;'>
         <th style='padding:6px 12px; text-align:left;'>에너지원</th>
         <th style='padding:6px 12px; text-align:right;'>연간 배출량</th>
         <th style='padding:6px 12px; text-align:right;'>(tCO₂eq)</th>
@@ -1147,14 +1180,14 @@ if st.session_state.analyzed:
       {by_fuel_rows}
     </tbody>
     <tfoot>
-      <tr style='border-top:2px solid #86efac; font-weight:700;'>
+      <tr style='border-top:1px solid #a7d4be; font-weight:700;'>
         <td style='padding:8px 12px;'>연간 절감 효과</td>
         <td style='padding:8px 12px; text-align:right;'>{co2['saving_kg']:,.0f} kg</td>
-        <td style='padding:8px 12px; text-align:right; color:#166534;'>({co2['saving_kg']/1000:.2f} t)</td>
+        <td style='padding:8px 12px; text-align:right; color:#064e3b;'>({co2['saving_kg']/1000:.2f} t)</td>
       </tr>
     </tfoot>
   </table>
-  <p style='font-size:0.82rem; color:#64748b; margin:10px 0 0 0; line-height:1.5;'>
+  <p style='font-size:0.82rem; color:#78716c; margin:10px 0 0 0; line-height:1.5;'>
     * HP 배출량은 난방·온수 등 HP의 전기 사용분 포함 기준 (2026년 그리드).
     15년에 걸쳐 그리드 청정화로 HP 배출량은 점차 감소합니다 (2040년 약 0.20 t).
   </p>
@@ -1164,9 +1197,9 @@ if st.session_state.analyzed:
     # ─── 8-4-2. 에너지 효율 비교 박스 (Sheet2 kWh 기반) ───────────────
     fuel_unit_label = "도시가스" if "도시가스" in fuel_key else fuel_key
     st.markdown(f"""
-<div class='saving-box' style='background:#eff6ff; border-color:#93c5fd;'>
-  <p class='saving-title' style='color:#1e40af;'>⚡ 우리 가족의 1년 에너지 사용량</p>
-  <p class='saving-sub' style='color:#1e3a8a;'>
+<div class='saving-box' style='background:var(--bg-teal); border-color:var(--border-teal);'>
+  <p class='saving-title' style='color:#134e4a;'>⚡ 우리 가족의 1년 에너지 사용량</p>
+  <p class='saving-sub' style='color:#0f766e;'>
     기존 보일러로는 연간 <b>{kwh['annual_demand']:,.0f} kWh</b>의 {fuel_unit_label} 에너지가 필요해요.
     <br>
     히트펌프로 바꾸면 같은 따뜻함을 만드는 데 <b>전기 {kwh['annual_hp']:,.0f} kWh</b>면 충분합니다 —
@@ -1187,7 +1220,7 @@ if st.session_state.analyzed:
         y=alt.Y("금액(만원):Q"),
         color=alt.Color("구분:N", scale=alt.Scale(
             domain=["기존 난방비(만원)", "HP 난방요금(만원)"],
-            range=["#f87171", "#60a5fa"]
+            range=["#9a3412", "#0d9488"]
         ), legend=alt.Legend(orient="top", title=None)),
         xOffset="구분:N",
         tooltip=["월", "구분", "금액(만원)"],
@@ -1299,14 +1332,14 @@ if st.session_state.analyzed:
             y=alt.Y("kg:Q", title="연간 배출량 (kg)"),
             color=alt.Color("구분:N", scale=alt.Scale(
                 domain=[f"기존 ({fuel_key})", "HP (그리드 청정화)"],
-                range=["#f87171", "#60a5fa"]
+                range=["#9a3412", "#0d9488"]
             ), legend=alt.Legend(orient="top", title=None)),
             tooltip=["연차", "구분", "kg"],
         )
         gap_text = alt.Chart(df_gap).mark_text(
             fontWeight="bold",
             fontSize=11,
-            color="#7c3aed",
+            color="#334155",
         ).encode(
             x=alt.X("연차:O"),
             y=alt.Y("중간점:Q"),
@@ -1324,7 +1357,7 @@ if st.session_state.analyzed:
             "누적 절감(kg)": co2_15_cum,
         })
         st.altair_chart(
-            alt.Chart(df_cum_co2).mark_area(opacity=0.55, color="#86efac").encode(
+            alt.Chart(df_cum_co2).mark_area(opacity=0.55, color="#10b981").encode(
                 x=alt.X("연차:O", title="연차", axis=alt.Axis(labelAngle=0)),
                 y=alt.Y("누적 절감(kg):Q"),
                 tooltip=["연차", "누적 절감(kg)"],
