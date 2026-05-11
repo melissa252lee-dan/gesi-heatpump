@@ -909,10 +909,17 @@ col_sim, col_opt = st.columns(2)
 with col_sim:
     fuel_inflation = st.slider("가스/등유요금 인상률 (%)", 0.0, 15.0, 0.0)
     elec_inflation = st.slider("전기요금 인상률 (%)",    0.0, 15.0, 0.0)
+    solar_install  = st.radio(
+        "태양광 설치 여부",
+        ["아니오", "예"],
+        horizontal=True,
+        index=0,
+    )
     solar_capa_kw  = st.number_input(
         "태양광 용량 (kW)",
         value=0.0,
-        help="태양광 설치 시 발전 용량을 입력해 주세요. (요금제 선택에서 '태양광 설치' 옵션을 함께 골라야 적용됩니다)"
+        disabled=(solar_install == "아니오"),
+        help="태양광 설치 시 발전 용량을 입력해 주세요.",
     )
 
 with col_opt:
@@ -926,15 +933,27 @@ with col_opt:
     st.markdown("**전기 요금제 선택**")
     st.markdown("""
 <div class='help-text'>
-사용 중인 요금제와 태양광 설치 여부에 맞춰 선택해 주세요.
+사용 중인 요금제를 선택해 주세요.
 </div>""", unsafe_allow_html=True)
 
-    tariff_label = st.radio(
+    tariff_choice_simple = st.radio(
         "요금제",
-        list(TARIFF_LABEL_MAP.keys()),
+        ["누진제", "일반용", "계시별"],
         label_visibility="collapsed",
         help="누진제: 주택용 저압 누진제 / 일반용: HP 전용 별도 미터 (태양광 영향 없음) / 계시별: 시간대별 요금제",
     )
+    if tariff_choice_simple == "일반용" and solar_install == "예":
+        st.caption("ℹ️ 일반용은 HP 전용 별도 미터라서 태양광 발전 영향이 없습니다.")
+
+# ── tariff_label 재구성 (기존 TARIFF_LABEL_MAP 5개 키와 호환) ──
+# 일반용은 태양광과 무관 — 사용자가 태양광=예 선택해도 미설치로 처리
+_apply_solar = (tariff_choice_simple != "일반용") and (solar_install == "예")
+if tariff_choice_simple == "일반용":
+    tariff_label = "일반용 (HP 전용 미터)"
+elif _apply_solar:
+    tariff_label = f"{tariff_choice_simple} (태양광 설치)"
+else:
+    tariff_label = f"{tariff_choice_simple} (태양광 미설치)"
 
 # 입력 변경 감지 → 분석 결과 초기화
 _input_signature = (winter_heat_man, winter_elec_man, region, house_type, house_size,
@@ -1196,10 +1215,6 @@ if st.session_state.analyzed:
             f"📅 **월별 분배 기준**: 입력하신 광역시도({region})의 평균 월별 난방 비중을 사용자의 1월 입력값에 비례하여 분배한 추정치입니다. "
             "여름철에도 온수·취사 등으로 일부 가스 비용이 발생하는 것이 반영되어 있습니다."
         )
-        st.caption(
-            f"⚡ **HP 전력 사용(kWh)**은 누진제 사용자가 자기 누진 구간을 예측하는 데 도움이 됩니다 "
-            f"(예: 1월 {kwh['monthly_hp'][0]:.0f} kWh 사용 → 전체 가전과 합쳐 누진 단계 추정 가능)."
-        )
 
     # ─── 8-7. 장기 차트 ──────────────────────────────────────────────
     st.markdown('<div class="section-title">📈 장기 시뮬레이션</div>', unsafe_allow_html=True)
@@ -1272,11 +1287,12 @@ if st.session_state.analyzed:
             "kg":  co2_15_ex + co2_15_hp,
             "구분": [f"기존 ({fuel_key})"] * 15 + ["HP (그리드 청정화)"] * 15,
         })
-        # 매년 두 에너지원 사이 차이를 라벨로 표시 (중간점 위치)
+        # 매년 두 에너지원 사이 차이를 라벨로 표시 (중간점 위치, ↕ 화살표 + kg)
         df_gap = pd.DataFrame({
             "연차": years_15,
             "차이(kg)": co2_15_save,
             "중간점":  [(ex + hp) / 2 for ex, hp in zip(co2_15_ex, co2_15_hp)],
+            "차이라벨": [f"↕ {s:,.0f}" for s in co2_15_save],
         })
         line_layer = alt.Chart(df_emit).mark_line(point=True, strokeWidth=2.5).encode(
             x=alt.X("연차:O", title="연차", axis=alt.Axis(labelAngle=0)),
@@ -1290,11 +1306,11 @@ if st.session_state.analyzed:
         gap_text = alt.Chart(df_gap).mark_text(
             fontWeight="bold",
             fontSize=11,
-            color="#16a34a",
+            color="#7c3aed",
         ).encode(
             x=alt.X("연차:O"),
             y=alt.Y("중간점:Q"),
-            text=alt.Text("차이(kg):Q", format=",.0f"),
+            text=alt.Text("차이라벨:N"),
             tooltip=[alt.Tooltip("연차"), alt.Tooltip("차이(kg):Q", format=",.0f")],
         )
         st.altair_chart(
