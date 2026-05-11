@@ -263,10 +263,12 @@ def load_tariff_xlsx():
                       for fuel, r in SHEET2_HP_KWH_ROWS.items()}
 
         # ── Sheet2 핵심 파라미터 (행 43 수식 복제용) ──
-        # 행 9 col 3-6: 연료별 효율  /  행 40: 기본요금  /  행 42: 단가(원/kWh)  /  행 14: 난방비중
+        # ⚠️ 행 9·10은 col 5-8 레이아웃 (헤더 행 8: col5=콘덴싱, col6=일반, col7=등유, col8=LPG, col9-10=HP)
+        # ⚠️ 행 40·42·14는 col 3-6 레이아웃 (헤더 행 39: col3=콘덴싱, col4=일반, col5=등유, col6=LPG)
+        # 같은 시트지만 두 종류의 레이아웃이 섞여있으므로 행마다 시작 col 다름!
         fuel_order = ["도시가스(콘덴싱)", "도시가스(일반)", "등유", "LPG"]
         sheet2_params = {
-            "efficiency":    {f: float(ws_s2.cell(row=9,  column=3+i).value or 0) for i, f in enumerate(fuel_order)},
+            "efficiency":    {f: float(ws_s2.cell(row=9,  column=5+i).value or 0) for i, f in enumerate(fuel_order)},
             "base_fee":      {f: float(ws_s2.cell(row=40, column=3+i).value or 0) for i, f in enumerate(fuel_order)},
             "rate":          {f: float(ws_s2.cell(row=42, column=3+i).value or 0) for i, f in enumerate(fuel_order)},
             "heating_share": float(ws_s2.cell(row=14, column=3).value or 0.85),
@@ -276,14 +278,15 @@ def load_tariff_xlsx():
         # 연료별 배출계수: 사용자의 실제 난방 에너지 수요(kWh)에 곱하면 kg 단위 CO₂ 배출량.
         # HP 배출계수: 2025년 기준(현재 그리드)와 2038년 기준(미래 청정 그리드) 두 시점 제공.
         # 검증: 표준 5582.5 kWh × 0.2185 = 1219.6 kg ≈ 1.22 t (Sheet2 행 65 col 3과 일치)
+        # ⚠️ 행 9와 동일하게 col 5-8 레이아웃 (행 8 헤더 기준: col5=콘덴싱 ... col8=LPG, col9-10=HP)
         emission_factors_fuel = {
-            "도시가스(콘덴싱)": float(ws_s2.cell(row=10, column=3).value or 0),
-            "도시가스(일반)":   float(ws_s2.cell(row=10, column=4).value or 0),
-            "등유":            float(ws_s2.cell(row=10, column=5).value or 0),
-            "LPG":             float(ws_s2.cell(row=10, column=6).value or 0),
+            "도시가스(콘덴싱)": float(ws_s2.cell(row=10, column=5).value or 0),
+            "도시가스(일반)":   float(ws_s2.cell(row=10, column=6).value or 0),
+            "등유":            float(ws_s2.cell(row=10, column=7).value or 0),
+            "LPG":             float(ws_s2.cell(row=10, column=8).value or 0),
         }
-        emission_factor_hp_2025 = float(ws_s2.cell(row=10, column=7).value or 0)
-        emission_factor_hp_2038 = float(ws_s2.cell(row=10, column=8).value or 0)
+        emission_factor_hp_2025 = float(ws_s2.cell(row=10, column=9).value or 0)
+        emission_factor_hp_2038 = float(ws_s2.cell(row=10, column=10).value or 0)
 
         # ── Sheet2 행 65-82 — 18년 연간 온실가스 배출량 (tCO2eq, 표준가구 기준) ──
         # 연료(콘덴싱/일반/등유/LPG)는 매년 동일, HP는 그리드 청정화로 매년 감소
