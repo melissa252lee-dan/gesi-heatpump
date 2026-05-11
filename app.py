@@ -48,7 +48,7 @@ st.markdown("""
     --accent-emerald:   #047857;   /* 절감/긍정 */
     --accent-emerald-d: #064e3b;   /* 더 진한 강조 */
     --accent-teal:      #0f766e;   /* HP/대안 */
-    --accent-clay:      #9a3412;   /* 가스/기존 */
+    --accent-red:       #dc2626;   /* 가스/기존 */
     --accent-slate:     #475569;   /* 메타데이터 배지 */
 
     /* Elevation */
@@ -1220,7 +1220,7 @@ if st.session_state.analyzed:
         y=alt.Y("금액(만원):Q"),
         color=alt.Color("구분:N", scale=alt.Scale(
             domain=["기존 난방비(만원)", "HP 난방요금(만원)"],
-            range=["#9a3412", "#0d9488"]
+            range=["#dc2626", "#0d9488"]
         ), legend=alt.Legend(orient="top", title=None)),
         xOffset="구분:N",
         tooltip=["월", "구분", "금액(만원)"],
@@ -1332,7 +1332,7 @@ if st.session_state.analyzed:
             y=alt.Y("kg:Q", title="연간 배출량 (kg)"),
             color=alt.Color("구분:N", scale=alt.Scale(
                 domain=[f"기존 ({fuel_key})", "HP (그리드 청정화)"],
-                range=["#9a3412", "#0d9488"]
+                range=["#dc2626", "#0d9488"]
             ), legend=alt.Legend(orient="top", title=None)),
             tooltip=["연차", "구분", "kg"],
         )
