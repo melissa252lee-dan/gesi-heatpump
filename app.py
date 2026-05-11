@@ -284,14 +284,14 @@ def load_tariff_xlsx():
         emission_factor_hp_2025 = float(ws_s2.cell(row=10, column=9).value or 0)
         emission_factor_hp_2038 = float(ws_s2.cell(row=10, column=10).value or 0)
 
-        # ── Sheet2 행 65-82 — 18년 연간 온실가스 배출량 (tCO2eq, 표준가구 기준) ──
+        # ── Sheet2 행 65-79 — 15년 연간 온실가스 배출량 (tCO2eq, 표준가구 기준) ──
+        # 엑셀 원본은 18년치(행 65-82, 2026-2043)지만 앱은 앞 15년(2026-2040)만 사용
         # 연료(콘덴싱/일반/등유/LPG)는 매년 동일, HP는 그리드 청정화로 매년 감소
-        # 사용자 가구는 scale 보정으로 환산 가능 (참고용 — 18년 시뮬레이션 등)
-        emission_18yr = {}
+        emission_15yr = {}
         for fuel, col in [("도시가스(콘덴싱)", 3), ("도시가스(일반)", 4),
                            ("등유", 5), ("LPG", 6), ("히트펌프", 7)]:
-            emission_18yr[fuel] = [float(ws_s2.cell(row=65+y, column=col).value or 0)
-                                    for y in range(18)]
+            emission_15yr[fuel] = [float(ws_s2.cell(row=65+y, column=col).value or 0)
+                                    for y in range(15)]
 
         # ── Sheet3 — 광역시도별 월별 난방 비중 (17개 시도 + 전국) ──
         ws_s3 = wb["Sheet3"]
@@ -329,7 +329,7 @@ def load_tariff_xlsx():
             "emission_factors_fuel":   emission_factors_fuel,
             "emission_factor_hp_2025": emission_factor_hp_2025,
             "emission_factor_hp_2038": emission_factor_hp_2038,
-            "emission_18yr":  emission_18yr,
+            "emission_15yr":  emission_15yr,
         }, None
     except Exception as e:
         return None, str(e)
@@ -467,17 +467,17 @@ def calc_monthly_stats(monthly_ex_man, monthly_hp_man, monthly_ratios,
     }
 
 
-def calc_annual_co2_emissions(fuel_key, emission_18yr, year_idx=0):
+def calc_annual_co2_emissions(fuel_key, emission_15yr, year_idx=0):
     """연간 CO₂ 배출량 계산 — 엑셀 Sheet2 행 65~82 값을 그대로 사용.
 
-    행 65~82는 표준가구(연 65만원) 기준 18년치 연간 배출량(tCO2eq)을 담고 있으며,
+    행 65~79는 표준가구(연 65만원) 기준 15년치 연간 배출량(tCO2eq)을 담고 있으며,
     이 값을 가구 규모 보정 없이 그대로 표시합니다.
     HP는 그리드 청정화로 매년 감소, 연료(가스/등유/LPG)는 매년 동일.
 
     Args:
         fuel_key:       사용자 선택 연료 (도시가스(콘덴싱)/일반/등유/LPG)
-        emission_18yr:  Sheet2 행 65-82 데이터 dict (load_tariff_xlsx)
-        year_idx:       0=2026(현재), 1~17=2027~2043
+        emission_15yr:  Sheet2 행 65-79 데이터 dict (15년치, load_tariff_xlsx)
+        year_idx:       0=2026(현재), 1~14=2027~2040
 
     Returns:
         dict {
@@ -487,8 +487,8 @@ def calc_annual_co2_emissions(fuel_key, emission_18yr, year_idx=0):
             "by_fuel":   5개 항목 모두 dict {연료명: kg}  — 비교 표시용
         }
     """
-    by_fuel = {fuel: emission_18yr[fuel][year_idx] * 1000  # t → kg
-               for fuel in emission_18yr}
+    by_fuel = {fuel: emission_15yr[fuel][year_idx] * 1000  # t → kg
+               for fuel in emission_15yr}
     ex_kg = by_fuel[fuel_key]
     hp_kg = by_fuel["히트펌프"]
     return {
@@ -754,15 +754,15 @@ def calc_dynamic_result(tariff_label, monthly_hp_kwh, monthly_appliance_kwh,
     }
 
 
-def simulate_18yr(net_capex_man, ann_heat_man, ann_hp_man, fuel_inflation_pct, elec_inflation_pct):
-    """18년 누적 비용·순이익 시뮬레이션 (인플레이션 복리 적용).
+def simulate_15yr(net_capex_man, ann_heat_man, ann_hp_man, fuel_inflation_pct, elec_inflation_pct):
+    """15년 누적 비용·순이익 시뮬레이션 (인플레이션 복리 적용).
 
     Returns: (years, gas_cum, hp_cum, net_profit, payback_year)
     """
-    years = list(range(1, 19))
+    years = list(range(1, 16))
     gas_cum, hp_cum, net_profit = [], [], []
     gas_total, hp_total = 0.0, float(net_capex_man)
-    payback = "18년 초과"
+    payback = "15년 초과"
 
     for y in years:
         gas_total += ann_heat_man * ((1 + fuel_inflation_pct / 100) ** y)
@@ -771,7 +771,7 @@ def simulate_18yr(net_capex_man, ann_heat_man, ann_hp_man, fuel_inflation_pct, e
         gas_cum.append(int(gas_total))
         hp_cum.append(int(hp_total))
         net_profit.append(profit)
-        if payback == "18년 초과" and profit > 0:
+        if payback == "15년 초과" and profit > 0:
             payback = f"{y}년차"
 
     return years, gas_cum, hp_cum, net_profit, payback
@@ -797,7 +797,7 @@ if excel_data:
     EMISSION_FACTORS_FUEL   = excel_data["emission_factors_fuel"]    # Sheet2 행 10 col 5-8: 연료별 배출계수 (kg/kWh)
     EMISSION_FACTOR_HP_2025 = excel_data["emission_factor_hp_2025"]  # Sheet2 행 10 col 9: HP 2025년 배출계수
     EMISSION_FACTOR_HP_2038 = excel_data["emission_factor_hp_2038"]  # Sheet2 행 10 col 10: HP 2038년 배출계수 (참고용)
-    EMISSION_18YR = excel_data["emission_18yr"] # Sheet2 행 65-82: 표준가구 18년 연간 배출량 (참고용)
+    EMISSION_15YR = excel_data["emission_15yr"] # Sheet2 행 65-79: 표준가구 15년치 연간 배출량
 
 col_title, col_logo = st.columns([6, 1])
 with col_title:
@@ -1004,10 +1004,10 @@ if st.session_state.analyzed:
     capex_man     = 1000  # 국내 기업 평균 견적 기준 — UI 안내문구 참조
     net_capex_man = max(0, capex_man - total_subsidy)
 
-    # 18년 시뮬레이션
+    # 15년 시뮬레이션
     ann_heat_base = result["ex_annual_man"]
     ann_hp_op     = result["hp_annual_man"]
-    years, gas_cum, hp_cum, net_profit, payback_year = simulate_18yr(
+    years, gas_cum, hp_cum, net_profit, payback_year = simulate_15yr(
         net_capex_man, ann_heat_base, ann_hp_op, fuel_inflation, elec_inflation
     )
 
@@ -1018,7 +1018,7 @@ if st.session_state.analyzed:
     jan_ratio = monthly_ratios[0] if monthly_ratios[0] > 0 else 1
     monthly_ex_man = [round(winter_heat_man * monthly_ratios[m-1] / jan_ratio, 2) for m in months]
     # 연간 CO₂ 배출량 — 엑셀 Sheet2 행 65 (2026년) 값을 그대로 사용
-    co2 = calc_annual_co2_emissions(fuel_key, EMISSION_18YR, year_idx=0)
+    co2 = calc_annual_co2_emissions(fuel_key, EMISSION_15YR, year_idx=0)
 
     # 월별 CO₂는 연간 배출량을 광역시도 월별 비중으로 안분
     monthly_stats = calc_monthly_stats(
@@ -1056,7 +1056,7 @@ if st.session_state.analyzed:
     hp_space, _hp_space_mm, hp_capacity = get_hp_specs(house_size)
     m1, m2, m3, m4 = st.columns(4)
     m1.metric("투자 회수 시점", payback_year)
-    m2.metric("18년 순이익", f"{net_profit[-1]:,} 만원")
+    m2.metric("15년 순이익", f"{net_profit[-1]:,} 만원")
     m3.metric("히트펌프 설치 공간", hp_space)
     m4.metric("적정 히트펌프 용량", hp_capacity)
 
@@ -1137,7 +1137,7 @@ if st.session_state.analyzed:
   </table>
   <p style='font-size:0.82rem; color:#64748b; margin:10px 0 0 0; line-height:1.5;'>
     * HP 배출량은 난방·온수 등 HP의 전기 사용분 포함 기준 (2026년 그리드).
-    18년에 걸쳐 그리드 청정화로 HP 배출량은 점차 감소합니다 (2043년 0.03 t).
+    15년에 걸쳐 그리드 청정화로 HP 배출량은 점차 감소합니다 (2040년 약 0.20 t).
   </p>
 </div>
 """, unsafe_allow_html=True)
@@ -1201,11 +1201,11 @@ if st.session_state.analyzed:
             f"(예: 1월 {kwh['monthly_hp'][0]:.0f} kWh 사용 → 전체 가전과 합쳐 누진 단계 추정 가능)."
         )
 
-    # ─── 8-7. 18년 차트 ──────────────────────────────────────────────
-    st.markdown('<div class="section-title">📈 18년 장기 시뮬레이션</div>', unsafe_allow_html=True)
+    # ─── 8-7. 15년 차트 ──────────────────────────────────────────────
+    st.markdown('<div class="section-title">📈 15년 장기 시뮬레이션</div>', unsafe_allow_html=True)
     g1, g2 = st.columns(2)
     with g1:
-        st.write("**18년 누적 비용 흐름**")
+        st.write("**15년 누적 비용 흐름**")
         df_cum = pd.DataFrame({"연도": years, "기존": gas_cum, "HP": hp_cum}) \
                    .melt("연도", var_name="시나리오", value_name="비용")
         st.altair_chart(
@@ -1228,31 +1228,31 @@ if st.session_state.analyzed:
             use_container_width=True
         )
 
-    # ─── 8-7-2. 18년 환경 효과 (Sheet2 행 65~82 활용) ─────────────────
-    # 그리드 청정화로 HP 배출량이 매년 감소 — 2026년 vs 2043년 효과 비교
-    st.markdown('<div class="section-title">🌍 18년 환경 효과 (그리드 청정화 반영)</div>',
+    # ─── 8-7-2. 15년 환경 효과 (Sheet2 행 65~79 활용 — 2026~2040) ────
+    # 그리드 청정화로 HP 배출량이 매년 감소 — 2026년 vs 2040년 효과 비교
+    st.markdown('<div class="section-title">🌍 15년 환경 효과 (그리드 청정화 반영)</div>',
                 unsafe_allow_html=True)
 
-    # 18년치 배출량 — 엑셀 Sheet2 행 65~82 값을 그대로 사용 (kg 단위)
-    years_18 = list(range(1, 19))
-    co2_18_ex = [EMISSION_18YR[fuel_key][y] * 1000 for y in range(18)]
-    co2_18_hp = [EMISSION_18YR["히트펌프"][y] * 1000 for y in range(18)]
-    co2_18_save = [ex - hp for ex, hp in zip(co2_18_ex, co2_18_hp)]
-    co2_18_cum, _cum = [], 0.0
-    for s in co2_18_save:
+    # 15년치 배출량 — 엑셀 Sheet2 행 65~79 값을 그대로 사용 (kg 단위)
+    years_15 = list(range(1, 16))
+    co2_15_ex = [EMISSION_15YR[fuel_key][y] * 1000 for y in range(15)]
+    co2_15_hp = [EMISSION_15YR["히트펌프"][y] * 1000 for y in range(15)]
+    co2_15_save = [ex - hp for ex, hp in zip(co2_15_ex, co2_15_hp)]
+    co2_15_cum, _cum = [], 0.0
+    for s in co2_15_save:
         _cum += s
-        co2_18_cum.append(round(_cum, 0))
-    total_18yr_kg = co2_18_cum[-1]
-    hp_reduction_pct = (1 - co2_18_hp[-1] / co2_18_hp[0]) * 100 if co2_18_hp[0] > 0 else 0
+        co2_15_cum.append(round(_cum, 0))
+    total_15yr_kg = co2_15_cum[-1]
+    hp_reduction_pct = (1 - co2_15_hp[-1] / co2_15_hp[0]) * 100 if co2_15_hp[0] > 0 else 0
 
     # 누적 효과 강조 박스
     st.markdown(f"""
 <div class='saving-box'>
-  <p class='saving-title'>🌍 18년 누적 효과 — 총 {total_18yr_kg:,.0f} kgCO₂ ({total_18yr_kg/1000:.1f} 톤) 감축</p>
+  <p class='saving-title'>🌍 15년 누적 효과 — 총 {total_15yr_kg:,.0f} kgCO₂ ({total_15yr_kg/1000:.1f} 톤) 감축</p>
   <p class='saving-sub'>
     재생에너지 비중 확대로 그리드(전기) 자체가 청정해지면서 <b>HP 배출량은 매년 감소</b>합니다:
     <br>
-    <b>2026년 {co2_18_hp[0]:,.0f} kg → 2043년 {co2_18_hp[-1]:,.0f} kg</b>
+    <b>2026년 {co2_15_hp[0]:,.0f} kg → 2040년 {co2_15_hp[-1]:,.0f} kg</b>
     (약 {hp_reduction_pct:.0f}% 감소).
     반면 가스·등유·LPG 보일러는 연소 시점에서 배출하므로 매년 동일합니다.
   </p>
@@ -1264,9 +1264,9 @@ if st.session_state.analyzed:
     with g3:
         st.write("**연간 CO₂ 배출량 추이**")
         df_emit = pd.DataFrame({
-            "연차": years_18 + years_18,
-            "kg":  co2_18_ex + co2_18_hp,
-            "구분": [f"기존 ({fuel_key})"] * 18 + ["HP (그리드 청정화)"] * 18,
+            "연차": years_15 + years_15,
+            "kg":  co2_15_ex + co2_15_hp,
+            "구분": [f"기존 ({fuel_key})"] * 15 + ["HP (그리드 청정화)"] * 15,
         })
         st.altair_chart(
             alt.Chart(df_emit).mark_line(point=True, strokeWidth=2.5).encode(
@@ -1283,8 +1283,8 @@ if st.session_state.analyzed:
     with g4:
         st.write("**누적 CO₂ 절감량**")
         df_cum_co2 = pd.DataFrame({
-            "연차": years_18,
-            "누적 절감(kg)": co2_18_cum,
+            "연차": years_15,
+            "누적 절감(kg)": co2_15_cum,
         })
         st.altair_chart(
             alt.Chart(df_cum_co2).mark_area(opacity=0.55, color="#86efac").encode(
@@ -1295,27 +1295,7 @@ if st.session_state.analyzed:
             use_container_width=True
         )
 
-    # ─── 8-8. 가정값 상세 ────────────────────────────────────────────
-    with st.expander("📋 적용된 계산 가정값"):
-        subsidy_text = "적용" if use_subsidy else "없음"
-        st.markdown(f"""
-| 항목 | 적용값 |
-|------|--------|
-| 적용 요금제 | **{tariff_label}** |
-| 적용 난방 유형 | **{fuel_key}** |
-| 규모 보정 계수 | **×{round(scale, 2)}** |
-| 설비 CAPEX | **{capex_man}만원 (앱 고정값)** |
-| 보조금 | **{total_subsidy}만원** ({subsidy_text}) |
-| 순 투자비 | **{net_capex_man}만원** |
-| 기존 연간 난방비 | **{ann_heat_base}만원** |
-| HP 연간 전기요금 | **{ann_hp_op}만원** |
-| 지역 sCOP (참고) | **{dynamic_cop:.2f}** (기후 존 {zone}) |
-| 월별 분배 기준 지역 | **{REGION_NAME_MAP.get(region, '전국')}** |
-| 연간 CO₂ 배출량 | **{fuel_key} {co2['ex_kg']:,.0f} kg / HP {co2['hp_kg']:,.0f} kg** |
-| 18년 누적 CO₂ 절감 | **{total_18yr_kg:,.0f} kg ({total_18yr_kg/1000:.1f} t)** |
-        """)
-
-    # ─── 8-9. 면책 안내 ──────────────────────────────────────────────
+    # ─── 8-8. 면책 안내 ──────────────────────────────────────────────
     st.markdown("---")
     st.caption(
         "⚠️ **본 계산 결과는 간이 추정치로, 실제 결과와 차이가 발생할 수 있습니다.** "
