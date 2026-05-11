@@ -6,14 +6,12 @@
 
 데이터 출처: 전기요금완료본.xlsx (요금제 × 태양광 × 난방유형 20개 블록)
 """
-import io
 import os
 import pandas as pd
 import streamlit as st
 import altair as alt
 from PIL import Image
-from openpyxl import Workbook, load_workbook
-from openpyxl.styles import Font, Alignment, PatternFill, Border, Side
+from openpyxl import load_workbook
 
 
 st.set_page_config(page_title="히트펌프 경제성 분석 솔루션", layout="wide")
@@ -783,168 +781,6 @@ def simulate_18yr(net_capex_man, ann_heat_man, ann_hp_man, fuel_inflation_pct, e
     return years, gas_cum, hp_cum, net_profit, payback
 
 
-def safe_filename(label):
-    """라벨에서 공백·괄호 제거 (Windows 파일명 호환)."""
-    return label.replace(" ", "").replace("(", "_").replace(")", "")
-
-
-# ══════════════════════════════════════════════════════════════════════
-# 5. 엑셀 리포트 빌더
-# ══════════════════════════════════════════════════════════════════════
-
-def build_excel_report(*, region, tariff_label, fuel_key,
-                       winter_heat_man, winter_elec_man, solar_capa_kw,
-                       scale, csv_jan_man, dynamic_cop, zone,
-                       capex_man, use_subsidy_nat, use_subsidy_loc, net_capex_man,
-                       ann_heat_base, ann_hp_op, result,
-                       monthly_ex_man, hdd_zone, monthly_ratios, co2):
-    """3개 시트로 구성된 엑셀 리포트 생성 후 BytesIO 반환.
-
-    CO₂는 엑셀 Sheet2 행 65 (연간 온실가스 배출량 tCO2eq) × 사용자 scale 기준,
-    월별은 광역시도 월별 비중으로 안분.
-    """
-    wb = Workbook()
-
-    # 공통 스타일
-    fill_header  = PatternFill(start_color="1E293B", end_color="1E293B", fill_type="solid")
-    fill_subhead = PatternFill(start_color="F1F5F9", end_color="F1F5F9", fill_type="solid")
-    fill_blue    = PatternFill(start_color="E0F2FE", end_color="E0F2FE", fill_type="solid")
-    fill_green   = PatternFill(start_color="F0FDF4", end_color="F0FDF4", fill_type="solid")
-    font_white   = Font(color="FFFFFF", bold=True)
-    font_bold    = Font(bold=True)
-    font_input   = Font(color="0000FF", bold=True)
-    font_saving  = Font(color="166534", bold=True)
-    border_thin  = Border(left=Side(style="thin"), right=Side(style="thin"),
-                          top=Side(style="thin"),  bottom=Side(style="thin"))
-    align_center = Alignment(horizontal="center")
-    align_right  = Alignment(horizontal="right")
-
-    # ── 시트 ① 입력·가정 ─────────────────────────────────────────
-    ws1 = wb.active
-    ws1.title = "①입력_가정"
-    ws1.merge_cells("A1:D1")
-    ws1["A1"] = f"히트펌프 경제성 분석 ({region} / {tariff_label})"
-    ws1["A1"].fill = fill_header; ws1["A1"].font = font_white; ws1["A1"].alignment = align_center
-
-    rows1 = [
-        ("항목",            "값",                                        "단위",  "산출 근거"),
-        ("1월 난방비",       winter_heat_man,                            "만원",  "사용자 입력"),
-        ("1월 전기요금",     winter_elec_man,                            "만원",  "사용자 입력"),
-        ("난방 방식",        fuel_key,                                   "-",     "사용자 선택"),
-        ("전기 요금제",      tariff_label,                               "-",     "사용자 선택"),
-        ("태양광 용량",      solar_capa_kw,                              "kW",    "사용자 입력 (참고용)"),
-        ("적용 데이터",      f"{tariff_label} / {fuel_key}",             "-",     "전기요금완료본.xlsx"),
-        ("규모 보정 계수",   round(scale, 2),                            "배",    f"={winter_heat_man}÷{round(csv_jan_man, 2)}"),
-        ("지역 sCOP",        dynamic_cop,                                "-",     f"기후 존 ({zone})"),
-        ("설비 CAPEX",       capex_man,                                  "만원",  "앱 고정값 (국내 기업 평균)"),
-        ("정부 보조금",      SUBSIDY_NATIONAL if use_subsidy_nat else 0, "만원",  "기후에너지환경부 2026"),
-        ("지방 보조금",      SUBSIDY_LOCAL    if use_subsidy_loc else 0, "만원",  "정부 50% 매칭"),
-        ("순 투자비",        net_capex_man,                              "만원",  "=CAPEX-보조금"),
-        ("기존 연간 난방비", ann_heat_base,                              "만원",  "엑셀 기존난방비×규모보정"),
-        ("HP 연간 전기요금", ann_hp_op,                                  "만원",  "엑셀 HP연합계×규모보정"),
-        ("연간 절감액",      result["saving_man"],                       "만원",  "=기존-HP"),
-        ("Saving 비율",      f"{round(result['saving_ratio']*100, 1)}%", "-",     "엑셀 원본"),
-    ]
-    for ri, row_data in enumerate(rows1, 3):
-        for ci, val in enumerate(row_data, 1):
-            cell = ws1.cell(row=ri, column=ci, value=val)
-            cell.border = border_thin
-            if ri == 3:
-                cell.fill = fill_subhead; cell.font = font_bold
-            elif ci == 2:
-                cell.font = font_input; cell.alignment = align_right
-    ws1.column_dimensions["A"].width = 22
-    ws1.column_dimensions["D"].width = 45
-
-    # ── 시트 ② 월별 청구요금 ─────────────────────────────────────
-    ws2 = wb.create_sheet("②월별_청구요금")
-    ws2.merge_cells("A1:H1")
-    ws2["A1"] = f"월별 청구요금·CO₂ [{tariff_label} / {fuel_key}]"
-    ws2["A1"].fill = fill_header; ws2["A1"].font = font_white; ws2["A1"].alignment = align_center
-
-    headers2 = ["월", "기존 난방비(만원)", "HP 난방요금(만원)", "월별 절감액(만원)",
-                "절감률", "누적 절감액(만원)", "CO₂ 절감(kg)", "비고"]
-    for ci, h in enumerate(headers2, 1):
-        cell = ws2.cell(row=2, column=ci, value=h)
-        cell.fill = fill_subhead; cell.font = font_bold
-        cell.border = border_thin; cell.alignment = align_center
-
-    annual_saving_kg = co2["saving_kg"]
-    cum = 0.0
-    co2_total = 0.0
-    for m in range(1, 13):
-        r = m + 2
-        ex      = monthly_ex_man[m-1]
-        hp      = result["monthly_man"][m-1]
-        sav     = round(ex - hp, 2)
-        cum    += sav
-        sav_pct = f"{round(sav/ex*100, 1)}%" if ex > 0 else "-"
-        # 월별 CO₂ 절감 = 연간 절감(Sheet2 행 65 × scale) × 그 달 비중
-        co2_kg  = round(annual_saving_kg * monthly_ratios[m-1], 1)
-        co2_total += co2_kg
-        note    = "난방월" if hdd_zone[m-1] > 0 else "비난방월"
-
-        for ci, val in enumerate([f"{m}월", ex, hp, sav, sav_pct, round(cum, 2), co2_kg, note], 1):
-            ws2.cell(row=r, column=ci, value=val).border = border_thin
-        # 절감 관련 셀 초록색 강조
-        for ci in (4, 6, 7):
-            ws2.cell(row=r, column=ci).font = font_saving
-        if m % 2 == 0:
-            for ci in range(1, 9):
-                ws2.cell(row=r, column=ci).fill = fill_green
-
-    # 합계 행
-    r_sum = 15
-    summary_vals = [
-        "연간 합계", ann_heat_base, ann_hp_op, result["saving_man"],
-        f"{round(result['saving_ratio']*100, 1)}%", round(cum, 2), round(co2_total, 1), "-"
-    ]
-    for ci, val in enumerate(summary_vals, 1):
-        cell = ws2.cell(row=r_sum, column=ci, value=val)
-        cell.border = border_thin
-        cell.font = font_saving if ci in (4, 5, 6, 7) else font_bold
-
-    for col in "ABCDEFGH":
-        ws2.column_dimensions[col].width = 18
-
-    # ── 시트 ③ 18년 재무 분석 ────────────────────────────────────
-    ws3 = wb.create_sheet("③18년_재무_분석")
-    ws3.merge_cells("A1:H1")
-    ws3["A1"] = "18년 장기 투자 회수 시뮬레이션"
-    ws3["A1"].fill = fill_header; ws3["A1"].font = font_white; ws3["A1"].alignment = align_center
-
-    headers3 = ["연도", "물가지수(4%)", "기존 OPEX(만)", "HP OPEX(만)",
-                "연간 순이익(만)", "누적 순이익(만)", "ROI", "상태"]
-    for ci, h in enumerate(headers3, 1):
-        cell = ws3.cell(row=2, column=ci, value=h)
-        cell.fill = fill_subhead; cell.font = font_bold
-        cell.border = border_thin; cell.alignment = align_center
-
-    ref_capex = "'①입력_가정'!$B$15"  # 순 투자비 셀 참조
-    for y in range(1, 19):
-        r = y + 2
-        ws3.cell(row=r, column=1, value=f"{y}년차").border = border_thin
-        ws3.cell(row=r, column=2, value=f"=(1+0.04)^{y-1}").border = border_thin
-        ws3.cell(row=r, column=3, value=ann_heat_base).border = border_thin
-        ws3.cell(row=r, column=4, value=ann_hp_op).border = border_thin
-        ws3.cell(row=r, column=5, value=f"=C{r}-D{r}").border = border_thin
-        ws3.cell(row=r, column=6,
-                 value=f"=E{r}-{ref_capex}" if y == 1 else f"=F{r-1}+E{r}").border = border_thin
-        ws3.cell(row=r, column=7, value=f"=F{r}/{ref_capex}").border = border_thin
-        ws3.cell(row=r, column=7).number_format = "0%"
-        ws3.cell(row=r, column=8, value=f'=IF(F{r}>0,"수익","회수중")').border = border_thin
-        if y % 2 == 0:
-            for ci in range(1, 9):
-                ws3.cell(row=r, column=ci).fill = fill_blue
-
-    for col in "ABCDEFGH":
-        ws3.column_dimensions[col].width = 16
-
-    buf = io.BytesIO()
-    wb.save(buf)
-    return buf
-
-
 # ══════════════════════════════════════════════════════════════════════
 # 6. UI — 헤더 및 솔루션 개요
 # ══════════════════════════════════════════════════════════════════════
@@ -1500,24 +1336,3 @@ if st.session_state.analyzed:
 | CO₂ 출처 | **{fuel_key} {co2['ex_kg']:,.0f} / HP {co2['hp_kg']:,.0f} kg** | 엑셀 Sheet2 행 65 (2026년) × 규모 보정 |
 | 18년 누적 CO₂ 절감 | **{total_18yr_kg:,.0f} kg ({total_18yr_kg/1000:.1f} t)** | 엑셀 Sheet2 행 65~82 × 규모 보정 |
         """)
-
-    # ─── 8-9. 엑셀 다운로드 ──────────────────────────────────────────
-    excel_buffer = build_excel_report(
-        region=region, tariff_label=tariff_label, fuel_key=fuel_key,
-        winter_heat_man=winter_heat_man, winter_elec_man=winter_elec_man,
-        solar_capa_kw=solar_capa_kw, scale=scale, csv_jan_man=csv_jan_man,
-        dynamic_cop=dynamic_cop, zone=zone,
-        capex_man=capex_man, use_subsidy_nat=use_subsidy_nat, use_subsidy_loc=use_subsidy_loc,
-        net_capex_man=net_capex_man, ann_heat_base=ann_heat_base, ann_hp_op=ann_hp_op,
-        result=result, monthly_ex_man=monthly_ex_man, hdd_zone=hdd_zone,
-        monthly_ratios=monthly_ratios, co2=co2,
-    )
-
-    st.markdown("---")
-    st.download_button(
-        label="🚀 전문가용 수식 연동 정밀 엑셀 다운로드",
-        data=excel_buffer.getvalue(),
-        file_name=f"Expert_Report_{region}_{safe_filename(tariff_label)}.xlsx",
-        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        use_container_width=True,
-    )
