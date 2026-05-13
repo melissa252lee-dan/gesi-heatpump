@@ -14,7 +14,7 @@ from PIL import Image
 from openpyxl import load_workbook
 
 
-st.set_page_config(page_title="히트펌프 경제성 간이 계산기", layout="wide")
+st.set_page_config(page_title="GESI 히트펌프 경제성, 환경성 간이 계산기", layout="wide")
 
 
 # ══════════════════════════════════════════════════════════════════════
@@ -834,7 +834,7 @@ if excel_data:
 
 col_title, col_logo = st.columns([6, 1])
 with col_title:
-    st.title("히트펌프 경제성 간이 계산기")
+    st.title("GESI 히트펌프 경제성, 환경성 간이 계산기")
 with col_logo:
     if os.path.exists("logo.png"):
         st.image(Image.open("logo.png"), use_container_width=True)
@@ -878,8 +878,8 @@ st.markdown("""
       <li>사용 중인 <b>전기 요금제</b>를 5가지 중 하나 골라주세요
         <span style='color:#94a3b8; font-size:0.9rem;'>(태양광 설치 여부 포함)</span></li>
       <li>받을 수 있는 <b>보조금</b>을 체크하세요</li>
-      <li><b>'경제성 분석 실행'</b> 버튼을 누르면 끝!
-        <span style='color:#94a3b8; font-size:0.9rem;'>절감액·투자 회수 기간이 한 눈에 보입니다.</span></li>
+      <li><b>'경제성·환경성 분석 실행'</b> 버튼을 누르면 끝!
+        절감액·투자 회수 기간이 한 눈에 보입니다.</li>
     </ol>
   </div>
 
@@ -956,7 +956,7 @@ with col_sim:
     )
 
 with col_opt:
-    use_subsidy = st.checkbox(f"보조금 적용 ({SUBSIDY_TOTAL}만원)", value=True)
+    use_subsidy = st.checkbox(f"보조금 적용 ({SUBSIDY_TOTAL}만원)", value=False)
     st.caption(
         "⚠️ 난방 전기화 사업: 설치비의 70% 지원. "
         "2026년 현재 제주/경남/전남만 지원 가능, 신청 전 확인 필수."
@@ -999,7 +999,7 @@ if st.session_state.get("_last_input_key") != _input_signature:
 if "analyzed" not in st.session_state:
     st.session_state.analyzed = False
 
-if st.button("경제성 분석 실행", type="primary", use_container_width=True):
+if st.button("경제성·환경성 분석 실행", type="primary", use_container_width=True):
     st.session_state.analyzed = True
 
 
