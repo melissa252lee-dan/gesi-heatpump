@@ -14,7 +14,7 @@ from PIL import Image
 from openpyxl import load_workbook
 
 
-st.set_page_config(page_title="GESI 히트펌프 경제성, 환경성 간이 계산기", layout="wide")
+st.set_page_config(page_title="GESI 히트펌프 경제성·환경성 간이 계산기", layout="wide")
 
 
 # ══════════════════════════════════════════════════════════════════════
@@ -834,7 +834,7 @@ if excel_data:
 
 col_title, col_logo = st.columns([6, 1])
 with col_title:
-    st.title("GESI 히트펌프 경제성, 환경성 간이 계산기")
+    st.title("GESI 히트펌프 경제성·환경성 간이 계산기")
 with col_logo:
     if os.path.exists("logo.png"):
         st.image(Image.open("logo.png"), use_container_width=True)
@@ -944,9 +944,9 @@ with col_sim:
     elec_inflation = st.slider("전기요금 인상률 (%)",    0.0, 15.0, 0.0)
     solar_install  = st.radio(
         "태양광 설치 여부",
-        ["아니오", "예"],
+        ["예", "아니오"],
         horizontal=True,
-        index=0,
+        index=1,
     )
     solar_capa_kw  = st.number_input(
         "태양광 용량 (kW)",
