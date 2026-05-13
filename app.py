@@ -1343,20 +1343,33 @@ if st.session_state.analyzed:
             use_container_width=True
         )
     with g2:
-        st.write("**연도별 순수익(Cash Flow)**")
-        df_profit = pd.DataFrame({
-            "연도":   years,
-            "순수익": net_profit,
-            "상태":   ["수익" if p > 0 else "회수" for p in net_profit],
+        st.write("**연도별 운영비 추이** — 가스 vs HP (투자비 제외)")
+        # 매년 발생하는 순수 운영비 — 투자비 분담은 제외, 인플레이션은 반영
+        yearly_gas = [ann_heat_man * ((1 + fuel_inflation / 100) ** y) for y in years]
+        yearly_hp  = [ann_hp_op    * ((1 + elec_inflation / 100) ** y) for y in years]
+        df_ops = pd.DataFrame({
+            "연차": years + years,
+            "운영비": [round(v, 1) for v in yearly_gas + yearly_hp],
+            "구분":  ["기존 보일러"] * len(years) + ["히트펌프"] * len(years),
         })
-        st.altair_chart(
-            alt.Chart(df_profit).mark_bar().encode(
-                x=alt.X("연도:O", axis=alt.Axis(labelAngle=0)),
-                y=alt.Y("순수익:Q"),
-                color=alt.Color("상태:N"),
-            ).properties(height=380),
-            use_container_width=True
-        )
+        chart = alt.Chart(df_ops).mark_line(
+            point=alt.OverlayMarkDef(filled=True, size=60),
+            strokeWidth=2.5,
+            interpolate='monotone',
+        ).encode(
+            x=alt.X("연차:O", title="연차", axis=alt.Axis(labelAngle=0)),
+            y=alt.Y("운영비:Q", title="연간 운영비 (만원)"),
+            color=alt.Color("구분:N", scale=alt.Scale(
+                domain=["기존 보일러", "히트펌프"],
+                range=["#dc2626", "#0d9488"]
+            ), legend=alt.Legend(orient="top", title=None)),
+            tooltip=[
+                alt.Tooltip("연차:O"),
+                alt.Tooltip("구분:N"),
+                alt.Tooltip("운영비:Q", format=",.1f", title="운영비(만원)"),
+            ]
+        ).properties(height=380)
+        st.altair_chart(chart, use_container_width=True)
 
     # ─── 8-7-2. 환경 효과 (Sheet2 행 65~79 활용 — 2026~2040) ────
     # 그리드 청정화로 HP 배출량이 매년 감소 — 2026년 vs 2040년 효과 비교
