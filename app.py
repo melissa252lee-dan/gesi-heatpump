@@ -837,7 +837,7 @@ with col_title:
     st.title("GESI 히트펌프 경제성·환경성 간이 계산기")
 with col_logo:
     if os.path.exists("logo.png"):
-        st.image(Image.open("logo.png"), use_container_width=True)
+        st.image(Image.open("logo.png"), width=120)
 
 # 로드 실패 시 중단
 if load_err:
@@ -1321,11 +1321,13 @@ if st.session_state.analyzed:
             "구분": [f"기존 ({fuel_key})"] * 15 + ["HP (그리드 청정화)"] * 15,
         })
         # 매년 두 에너지원 사이 차이를 라벨로 표시 (중간점 위치, ↕ 화살표 + kg)
+        # 모바일 가독성을 위해 1·4·7·10·13·15년차만 표시 (3년 간격 + 마지막)
+        _label_years = {1, 4, 7, 10, 13, 15}
         df_gap = pd.DataFrame({
-            "연차": years_15,
-            "차이(kg)": co2_15_save,
-            "중간점":  [(ex + hp) / 2 for ex, hp in zip(co2_15_ex, co2_15_hp)],
-            "차이라벨": [f"↕ {s:,.0f}" for s in co2_15_save],
+            "연차": [y for y in years_15 if y in _label_years],
+            "차이(kg)": [co2_15_save[y-1] for y in years_15 if y in _label_years],
+            "중간점":  [(co2_15_ex[y-1] + co2_15_hp[y-1]) / 2 for y in years_15 if y in _label_years],
+            "차이라벨": [f"↕ {co2_15_save[y-1]:,.0f}" for y in years_15 if y in _label_years],
         })
         line_layer = alt.Chart(df_emit).mark_line(point=True, strokeWidth=2.5).encode(
             x=alt.X("연차:O", title="연차", axis=alt.Axis(labelAngle=0)),
