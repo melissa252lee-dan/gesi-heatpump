@@ -1298,48 +1298,46 @@ if st.session_state.analyzed:
     st.markdown('<div class="section-title">📈 장기 시뮬레이션</div>', unsafe_allow_html=True)
     g1, g2 = st.columns(2)
     with g1:
-        st.write("**투자 회수 곡선** — 누적 순이익")
-        # 0년차(=설치 시점, -투자비)부터 시작하여 매년 절감액만큼 회복
-        # 손익분기점(0) 아래는 빨강, 위는 초록으로 시각화
-        profit_series = [-net_capex_man] + list(net_profit)
-        df_net = pd.DataFrame({
-            "연차": list(range(0, 16)),
-            "누적순이익": profit_series,
-            "수익영역": [max(p, 0) for p in profit_series],
-            "손실영역": [min(p, 0) for p in profit_series],
-        })
-        # 손실 영역 (음수, 빨강)
-        neg_area = alt.Chart(df_net).mark_area(
-            opacity=0.45, color="#fca5a5", interpolate='monotone'
+        st.write("**누적 절감액 vs 투자비** — 운영비 절감만으로 투자비 회수")
+        # 매년 가스보일러 대비 HP 운영비 절감 (인플레이션 반영)
+        # 투자비를 제외한 순수 운영 절감액을 누적해서 보여줌
+        annual_savings = [
+            ann_heat_base * ((1 + fuel_inflation / 100) ** y) -
+            ann_hp_op     * ((1 + elec_inflation / 100) ** y)
+            for y in years
+        ]
+        cum_sav = []
+        _running = 0.0
+        for s in annual_savings:
+            _running += s
+            cum_sav.append(round(_running, 0))
+        df_sav = pd.DataFrame({"연차": years, "누적절감액": cum_sav})
+        # 메인 영역 — 누적 절감액 (초록)
+        area = alt.Chart(df_sav).mark_area(
+            opacity=0.45, color="#10b981",
+            line={'color': '#047857', 'strokeWidth': 2.5},
+            point=alt.OverlayMarkDef(filled=True, size=50, color='#047857'),
         ).encode(
             x=alt.X("연차:O", title="연차", axis=alt.Axis(labelAngle=0)),
-            y=alt.Y("손실영역:Q", title="누적 순이익 (만원)"),
-        )
-        # 수익 영역 (양수, 초록)
-        pos_area = alt.Chart(df_net).mark_area(
-            opacity=0.45, color="#86efac", interpolate='monotone'
-        ).encode(
-            x=alt.X("연차:O"),
-            y=alt.Y("수익영역:Q"),
-        )
-        # 손익분기점 (0) 점선
-        zero_line = alt.Chart(pd.DataFrame({"y": [0]})).mark_rule(
-            strokeDash=[6, 4], color="#64748b", strokeWidth=1.5
-        ).encode(y=alt.Y("y:Q"))
-        # 메인 라인 + 포인트 (전체 곡선, 다크 틸)
-        line = alt.Chart(df_net).mark_line(
-            color="#0f766e", strokeWidth=2.5, interpolate='monotone',
-            point=alt.OverlayMarkDef(filled=True, size=50, color='#0f766e')
-        ).encode(
-            x=alt.X("연차:O"),
-            y=alt.Y("누적순이익:Q"),
+            y=alt.Y("누적절감액:Q", title="누적 절감액 (만원)"),
             tooltip=[
-                alt.Tooltip("연차:O", title="연차"),
-                alt.Tooltip("누적순이익:Q", format=",.0f", title="누적 순이익(만원)")
+                alt.Tooltip("연차:O"),
+                alt.Tooltip("누적절감액:Q", format=",.0f", title="누적 절감액(만원)"),
             ]
         )
+        # 투자비 가로 점선 — 회수 기준선
+        capex_line = alt.Chart(pd.DataFrame({"y": [net_capex_man]})).mark_rule(
+            strokeDash=[6, 4], color="#dc2626", strokeWidth=2
+        ).encode(y=alt.Y("y:Q"))
+        # 투자비 라벨 (오른쪽 상단)
+        capex_label = alt.Chart(pd.DataFrame({
+            "x": [years[-1]], "y": [net_capex_man], "label": [f"투자비 {net_capex_man}만원 (회수 기준선)"]
+        })).mark_text(
+            align="right", baseline="bottom", dy=-4,
+            color="#dc2626", fontSize=11, fontWeight="bold"
+        ).encode(x=alt.X("x:O"), y=alt.Y("y:Q"), text="label:N")
         st.altair_chart(
-            (neg_area + pos_area + zero_line + line).properties(height=380),
+            (area + capex_line + capex_label).properties(height=380),
             use_container_width=True
         )
     with g2:
