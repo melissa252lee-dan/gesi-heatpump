@@ -1296,65 +1296,48 @@ if st.session_state.analyzed:
 
     # ─── 8-7. 장기 차트 ──────────────────────────────────────────────
     st.markdown('<div class="section-title">📈 장기 시뮬레이션</div>', unsafe_allow_html=True)
-    g1, g2 = st.columns(2)
-    with g1:
-        st.write("**누적 절감액 vs 투자비** — 운영비 절감만으로 투자비 회수")
-        # 매년 가스보일러 대비 HP 운영비 절감 (인플레이션 반영)
-        # 투자비를 제외한 순수 운영 절감액을 누적해서 보여줌
-        annual_savings = [
-            ann_heat_base * ((1 + fuel_inflation / 100) ** y) -
-            ann_hp_op     * ((1 + elec_inflation / 100) ** y)
-            for y in years
+    st.write("**누적 절감액 vs 투자비** — 운영비 절감만으로 투자비 회수")
+    # 매년 가스보일러 대비 HP 운영비 절감 (인플레이션 반영)
+    # 투자비를 제외한 순수 운영 절감액을 누적해서 보여줌
+    annual_savings = [
+        ann_heat_base * ((1 + fuel_inflation / 100) ** y) -
+        ann_hp_op     * ((1 + elec_inflation / 100) ** y)
+        for y in years
+    ]
+    cum_sav = []
+    _running = 0.0
+    for s in annual_savings:
+        _running += s
+        cum_sav.append(round(_running, 0))
+    df_sav = pd.DataFrame({"연차": years, "누적절감액": cum_sav})
+    # 메인 영역 — 누적 절감액 (초록)
+    area = alt.Chart(df_sav).mark_area(
+        opacity=0.45, color="#10b981",
+        line={'color': '#047857', 'strokeWidth': 2.5},
+        point=alt.OverlayMarkDef(filled=True, size=60, color='#047857'),
+    ).encode(
+        x=alt.X("연차:O", title="연차", axis=alt.Axis(labelAngle=0)),
+        y=alt.Y("누적절감액:Q", title="누적 절감액 (만원)"),
+        tooltip=[
+            alt.Tooltip("연차:O"),
+            alt.Tooltip("누적절감액:Q", format=",.0f", title="누적 절감액(만원)"),
         ]
-        cum_sav = []
-        _running = 0.0
-        for s in annual_savings:
-            _running += s
-            cum_sav.append(round(_running, 0))
-        df_sav = pd.DataFrame({"연차": years, "누적절감액": cum_sav})
-        # 메인 영역 — 누적 절감액 (초록)
-        area = alt.Chart(df_sav).mark_area(
-            opacity=0.45, color="#10b981",
-            line={'color': '#047857', 'strokeWidth': 2.5},
-            point=alt.OverlayMarkDef(filled=True, size=50, color='#047857'),
-        ).encode(
-            x=alt.X("연차:O", title="연차", axis=alt.Axis(labelAngle=0)),
-            y=alt.Y("누적절감액:Q", title="누적 절감액 (만원)"),
-            tooltip=[
-                alt.Tooltip("연차:O"),
-                alt.Tooltip("누적절감액:Q", format=",.0f", title="누적 절감액(만원)"),
-            ]
-        )
-        # 투자비 가로 점선 — 회수 기준선
-        capex_line = alt.Chart(pd.DataFrame({"y": [net_capex_man]})).mark_rule(
-            strokeDash=[6, 4], color="#dc2626", strokeWidth=2
-        ).encode(y=alt.Y("y:Q"))
-        # 투자비 라벨 (오른쪽 상단)
-        capex_label = alt.Chart(pd.DataFrame({
-            "x": [years[-1]], "y": [net_capex_man], "label": [f"투자비 {net_capex_man}만원 (회수 기준선)"]
-        })).mark_text(
-            align="right", baseline="bottom", dy=-4,
-            color="#dc2626", fontSize=11, fontWeight="bold"
-        ).encode(x=alt.X("x:O"), y=alt.Y("y:Q"), text="label:N")
-        st.altair_chart(
-            (area + capex_line + capex_label).properties(height=380),
-            use_container_width=True
-        )
-    with g2:
-        st.write("**연도별 순수익(Cash Flow)**")
-        df_profit = pd.DataFrame({
-            "연도":   years,
-            "순수익": net_profit,
-            "상태":   ["수익" if p > 0 else "회수" for p in net_profit],
-        })
-        st.altair_chart(
-            alt.Chart(df_profit).mark_bar().encode(
-                x=alt.X("연도:O", axis=alt.Axis(labelAngle=0)),
-                y=alt.Y("순수익:Q"),
-                color=alt.Color("상태:N"),
-            ).properties(height=380),
-            use_container_width=True
-        )
+    )
+    # 투자비 가로 점선 — 회수 기준선
+    capex_line = alt.Chart(pd.DataFrame({"y": [net_capex_man]})).mark_rule(
+        strokeDash=[6, 4], color="#dc2626", strokeWidth=2
+    ).encode(y=alt.Y("y:Q"))
+    # 투자비 라벨 (오른쪽 상단)
+    capex_label = alt.Chart(pd.DataFrame({
+        "x": [years[-1]], "y": [net_capex_man], "label": [f"투자비 {net_capex_man}만원 (회수 기준선)"]
+    })).mark_text(
+        align="right", baseline="bottom", dy=-4,
+        color="#dc2626", fontSize=12, fontWeight="bold"
+    ).encode(x=alt.X("x:O"), y=alt.Y("y:Q"), text="label:N")
+    st.altair_chart(
+        (area + capex_line + capex_label).properties(height=420),
+        use_container_width=True
+    )
 
     # ─── 8-7-2. 환경 효과 (Sheet2 행 65~79 활용 — 2026~2040) ────
     # 그리드 청정화로 HP 배출량이 매년 감소 — 2026년 vs 2040년 효과 비교
