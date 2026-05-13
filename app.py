@@ -182,14 +182,25 @@ TARIFF_LABEL_MAP = {
 
 # ── Sheet2 (kWh 기반 물리 데이터) 행 매핑 ──
 # 표준 가구(중부2, 거창군 32평, 연 65만원) 기준의 월별 에너지 흐름.
-# 행 45-48: 월별 난방 에너지 수요(kWh) — 가스/등유/LPG 기존 보일러 사용 시
-# 행 53-56: 월별 HP 전력 사용량(kWh) — HP로 전환했을 때 (= 난방수요 ÷ 월별 COP)
-SHEET2_DEMAND_ROWS = {
-    "도시가스(콘덴싱)": 45, "도시가스(일반)": 46, "등유": 47, "LPG": 48,
+#
+# [신규 엑셀 구조 — 2단계 모델]
+# 행 43: 실제 난방 에너지 사용량 (kWh) — 사용자가 실제 소비하는 연료량
+#        도시가스: (연간요금 - 기본료×12) ÷ 단가 × 난방비중
+#        등유/LPG: 연간요금 ÷ 단가
+# 행 44: 유효 열 수요 (kWh) — 효율 적용 후 실제 난방 열량 (HP 변환 기준)
+#        = 행 43 × 기기 효율
+# 행 46-49: 월별 유효 열 수요 (연료별) = 행 44 × 광역시도 월별 비중
+# 행 51:    월별 COP (기후존별)
+# 행 54-57: 월별 HP 전력 사용량 (연료별) = 행 46-49 ÷ 행 51
+SHEET2_FUEL_INPUT_ROW   = 43   # 실제 난방 에너지 사용량 (연료 입력)
+SHEET2_HEAT_DEMAND_ROW  = 44   # 유효 열 수요 (HP 변환 기준)
+SHEET2_MONTHLY_DEMAND_ROWS = {  # 월별 유효 열 수요 (Excel 행 46-49)
+    "도시가스(콘덴싱)": 46, "도시가스(일반)": 47, "등유": 48, "LPG": 49,
 }
-SHEET2_HP_KWH_ROWS = {
-    "도시가스(콘덴싱)": 53, "도시가스(일반)": 54, "등유": 55, "LPG": 56,
+SHEET2_HP_KWH_ROWS = {          # 월별 HP 전력 사용량 (Excel 행 54-57)
+    "도시가스(콘덴싱)": 54, "도시가스(일반)": 55, "등유": 56, "LPG": 57,
 }
+SHEET2_CO2_DATA_START_ROW = 66  # 15년 CO₂ 데이터 시작 (행 66 = 2026년)
 
 # ── Sheet3 광역 시도별 월별 난방 비중 매핑 ──
 # 사이트의 약식 시도명 → Sheet3의 정식 명칭
@@ -237,8 +248,12 @@ def load_tariff_xlsx():
     sCOP(HDD가중)는 각 존의 첫 행 col 16
 
     [Sheet2 — 표준 가구의 물리적 에너지 흐름 (kWh)]
-    행 45-48: 월별 난방 에너지 수요(연료별, 보일러 사용 시)
-    행 53-56: 월별 HP 전력 사용량(연료→HP 전환 후, = 난방수요 ÷ COP)
+    행 43:    실제 난방 에너지 사용량 (연료 입력, 효율 적용 전)
+    행 44:    유효 열 수요 (효율 적용 후, HP 변환 기준)
+    행 46-49: 월별 유효 열 수요 (연료별)
+    행 51:    월별 COP (기후존별)
+    행 54-57: 월별 HP 전력 사용량 (연료별) = 행 46-49 ÷ 행 51
+    행 66-80: 15년치 연간 CO₂ 배출량 (tCO2eq)
 
     Returns:
         (data, error_msg) — 성공 시 (dict, None), 실패 시 (None, str)
@@ -284,10 +299,12 @@ def load_tariff_xlsx():
             hdd[zone]          = [float(ws_cop.cell(row=r_hdd,  column=3+m).value or 0) for m in range(12)]
             monthly_cop[zone]  = [float(ws_cop.cell(row=r_cop,  column=3+m).value or 0) for m in range(12)]
 
-        # ── Sheet2 — 연료별 월별 난방 에너지 수요 / HP 전력 사용량 (kWh) ──
+        # ── Sheet2 — 연료별 월별 유효 열 수요 / HP 전력 사용량 (kWh) ──
+        # SHEET2_MONTHLY_DEMAND_ROWS: 행 46-49 (월별 유효 열 수요)
+        # SHEET2_HP_KWH_ROWS:         행 54-57 (월별 HP 전력 사용량)
         ws_s2 = wb["Sheet2"]
         kwh_demand = {fuel: [float(ws_s2.cell(row=r, column=3+m).value or 0) for m in range(12)]
-                      for fuel, r in SHEET2_DEMAND_ROWS.items()}
+                      for fuel, r in SHEET2_MONTHLY_DEMAND_ROWS.items()}
         kwh_hp     = {fuel: [float(ws_s2.cell(row=r, column=3+m).value or 0) for m in range(12)]
                       for fuel, r in SHEET2_HP_KWH_ROWS.items()}
 
@@ -304,10 +321,13 @@ def load_tariff_xlsx():
         }
 
         # ── Sheet2 행 10 — 기기 온실가스 배출계수 (tCO2eq/MWh = kgCO2eq/kWh) ──
-        # 연료별 배출계수: 사용자의 실제 난방 에너지 수요(kWh)에 곱하면 kg 단위 CO₂ 배출량.
-        # HP 배출계수: 2025년 기준(현재 그리드)와 2038년 기준(미래 청정 그리드) 두 시점 제공.
-        # 검증: 표준 5582.5 kWh × 0.2185 = 1219.6 kg ≈ 1.22 t (Sheet2 행 65 col 3과 일치)
-        # ⚠️ 행 9와 동일하게 col 5-8 레이아웃 (행 8 헤더 기준: col5=콘덴싱 ... col8=LPG, col9-10=HP)
+        # 적용 대상이 연료/HP에 따라 다름:
+        #   - 연료 (콘덴싱/일반/등유/LPG): 행 43 (실제 난방 에너지 사용량 kWh) × 배출계수
+        #     예) 콘덴싱: 6068 kWh × 0.2185 = 1326 kg = 1.33 t (행 66 col 3과 일치)
+        #   - 히트펌프: 행 44 (유효 열 수요 kWh) × HP 배출계수
+        #     예) 5582 kWh × 0.1312 = 732 kg = 0.73 t (행 66 col 7과 일치)
+        # HP 배출계수는 2025년/2038년 두 시점 제공 (그리드 청정화 반영).
+        # ⚠️ 행 9와 동일하게 col 5-8 레이아웃 (행 8 헤더: col5=콘덴싱~col8=LPG, col9-10=HP)
         emission_factors_fuel = {
             "도시가스(콘덴싱)": float(ws_s2.cell(row=10, column=5).value or 0),
             "도시가스(일반)":   float(ws_s2.cell(row=10, column=6).value or 0),
@@ -317,13 +337,14 @@ def load_tariff_xlsx():
         emission_factor_hp_2025 = float(ws_s2.cell(row=10, column=9).value or 0)
         emission_factor_hp_2038 = float(ws_s2.cell(row=10, column=10).value or 0)
 
-        # ── Sheet2 행 65-79 — 15년 연간 온실가스 배출량 (tCO2eq, 표준가구 기준) ──
-        # 엑셀 원본은 18년치(행 65-82, 2026-2043)지만 앱은 앞 15년(2026-2040)만 사용
+        # ── Sheet2 행 66-80 — 15년 연간 온실가스 배출량 (tCO2eq, 표준가구 기준) ──
+        # 엑셀 원본은 18년치(행 66-83, 2026-2043)지만 앱은 앞 15년(2026-2040)만 사용
         # 연료(콘덴싱/일반/등유/LPG)는 매년 동일, HP는 그리드 청정화로 매년 감소
+        # 검증: 행 66 col 3 = 1.326 t = 행 43 콘덴싱(6068 kWh) × 0.2185 kg/kWh ÷ 1000
         emission_15yr = {}
         for fuel, col in [("도시가스(콘덴싱)", 3), ("도시가스(일반)", 4),
                            ("등유", 5), ("LPG", 6), ("히트펌프", 7)]:
-            emission_15yr[fuel] = [float(ws_s2.cell(row=65+y, column=col).value or 0)
+            emission_15yr[fuel] = [float(ws_s2.cell(row=SHEET2_CO2_DATA_START_ROW+y, column=col).value or 0)
                                     for y in range(15)]
 
         # ── Sheet3 — 광역시도별 월별 난방 비중 (17개 시도 + 전국) ──
@@ -532,45 +553,65 @@ def calc_annual_co2_emissions(fuel_key, emission_15yr, year_idx=0):
     }
 
 
-def calc_demand_kwh_sheet2(annual_cost_won, fuel_key, sheet2_params):
-    """Sheet2 행 43 수식 그대로 복제 — 연간 난방 에너지 수요 (kWh) 계산.
+def calc_fuel_input_kwh(annual_cost_won, fuel_key, sheet2_params):
+    """Sheet2 행 43 수식 — 실제 난방 에너지 사용량 (kWh).
 
-    수식 (도시가스):  ((연간요금 - 기본요금×12) ÷ 단가) × 난방비중 × 효율
-    수식 (등유/LPG):  (연간요금 ÷ 단가) × 효율  (기본요금 0, 난방비중 미적용)
+    사용자가 1년 동안 실제로 소비하는 연료 에너지량 (효율 적용 전).
+    가스 고지서나 등유 구매량으로 환산 가능한 값.
+
+    수식 (도시가스):  (연간요금 - 기본요금×12) ÷ 단가 × 난방비중
+    수식 (등유/LPG):  연간요금 ÷ 단가  (기본료 0, 난방비중 미적용)
     """
     base_fee = sheet2_params["base_fee"][fuel_key]
     rate     = sheet2_params["rate"][fuel_key]
-    eff      = sheet2_params["efficiency"][fuel_key]
     share    = sheet2_params["heating_share"]
     if rate <= 0: return 0
     fuel_input_kwh = (annual_cost_won - base_fee * 12) / rate
     if "도시가스" in fuel_key:                # 도시가스만 난방비중 적용
         fuel_input_kwh *= share
-    return max(0, fuel_input_kwh * eff)
+    return max(0, fuel_input_kwh)
 
 
-def calc_kwh_data(annual_demand_kwh, monthly_ratios, monthly_cop_zone):
-    """Sheet2 행 45-48, 53-56 수식 복제 — 월별 kWh 계산.
+def calc_heat_demand_kwh(fuel_input_kwh, fuel_key, sheet2_params):
+    """Sheet2 행 44 수식 — 유효 열 수요 (kWh).
+
+    실제 난방으로 쓰이는 열량 (효율 적용 후) — HP가 만들어야 할 열량과 동일.
+    수식: 실제 사용량(행 43) × 기기 효율
+    """
+    eff = sheet2_params["efficiency"][fuel_key]
+    return fuel_input_kwh * eff
+
+
+def calc_kwh_data(fuel_input_annual, heat_demand_annual, monthly_ratios, monthly_cop_zone):
+    """Sheet2 행 46-49, 54-57 수식 복제 — 월별 kWh 계산.
 
     Args:
-        annual_demand_kwh: 연간 난방 에너지 수요 (calc_demand_kwh_sheet2 결과)
-        monthly_ratios:    사용자 광역시도의 월별 난방 비중 (Sheet3, 합=1)
-        monthly_cop_zone:  사용자 기후존의 월별 COP
+        fuel_input_annual:   행 43 결과 — 실제 연료 사용량 (kWh, 표시용)
+        heat_demand_annual:  행 44 결과 — 유효 열 수요 (kWh, HP 변환 기준)
+        monthly_ratios:      사용자 광역시도의 월별 난방 비중 (Sheet3, 합=1)
+        monthly_cop_zone:    사용자 기후존의 월별 COP
 
-    Returns: dict with 월별/연간 kWh 및 효율
+    Returns: dict
+        fuel_input_annual: 행 43 — 기존 보일러 연간 연료 사용량
+        heat_demand_annual: 행 44 — 유효 열 수요 (= HP가 만들어야 할 열량)
+        monthly_demand:    행 46-49 — 월별 유효 열 수요
+        monthly_hp:        행 54-57 — 월별 HP 전력 사용량
+        annual_hp:         연간 HP 전력 사용량
+        efficiency:        실 에너지 비교 배수 (= 연료 사용량 ÷ HP 전력 사용량)
     """
-    monthly_demand = [round(annual_demand_kwh * r, 1) for r in monthly_ratios]
+    monthly_demand = [round(heat_demand_annual * r, 1) for r in monthly_ratios]
     monthly_hp = [round(d / cop, 1) if cop > 0 else 0.0
                   for d, cop in zip(monthly_demand, monthly_cop_zone)]
-    annual_demand = round(sum(monthly_demand), 0)
-    annual_hp     = round(sum(monthly_hp), 0)
-    efficiency    = round(annual_demand / annual_hp, 1) if annual_hp > 0 else 0.0
+    annual_hp = round(sum(monthly_hp), 0)
+    # 사용자 관점 효율: "기존엔 X kWh 쓰던 걸 HP로는 Y kWh로" — 실제 에너지 비교
+    efficiency = round(fuel_input_annual / annual_hp, 1) if annual_hp > 0 else 0.0
     return {
-        "monthly_demand": monthly_demand,
-        "monthly_hp":     monthly_hp,
-        "annual_demand":  annual_demand,
-        "annual_hp":      annual_hp,
-        "efficiency":     efficiency,
+        "fuel_input_annual":  round(fuel_input_annual, 0),    # 행 43 (보일러 연료)
+        "heat_demand_annual": round(heat_demand_annual, 0),   # 행 44 (유효 열 수요)
+        "monthly_demand":     monthly_demand,                 # 행 46-49
+        "monthly_hp":         monthly_hp,                     # 행 54-57
+        "annual_hp":          annual_hp,
+        "efficiency":         efficiency,
     }
 
 
@@ -1021,13 +1062,15 @@ if st.session_state.analyzed:
     csv_jan_man = calc_standard_jan_heat_man(monthly_ratios)
     scale       = (winter_heat_man / csv_jan_man) if csv_jan_man > 0 else 1.0
 
-    # 에너지 사용량 (kWh) — Sheet2 행 43 수식 복제
+    # 에너지 사용량 (kWh) — Sheet2 2단계 모델
     # 사용자 연간 난방비 = 1월 입력 ÷ 1월 비중 (지역별)
     user_annual_cost_won = winter_heat_man * 10000 / monthly_ratios[0] if monthly_ratios[0] > 0 else 0
-    # Sheet2 행 43 수식으로 연간 난방 에너지 수요 산정
-    user_annual_demand_kwh = calc_demand_kwh_sheet2(user_annual_cost_won, fuel_key, SHEET2_PARAMS)
-    # 월별 분배 + HP 변환 (사용자 지역 비중 + 사용자 zone 월별 COP)
-    kwh = calc_kwh_data(user_annual_demand_kwh, monthly_ratios, MONTHLY_COP[zone])
+    # Sheet2 행 43 — 실제 난방 에너지 사용량 (연료 입력, 효율 적용 전)
+    user_fuel_input_kwh = calc_fuel_input_kwh(user_annual_cost_won, fuel_key, SHEET2_PARAMS)
+    # Sheet2 행 44 — 유효 열 수요 (= HP가 만들어야 할 열량, 효율 적용 후)
+    user_heat_demand_kwh = calc_heat_demand_kwh(user_fuel_input_kwh, fuel_key, SHEET2_PARAMS)
+    # 월별 분배 (행 46-49) + HP 변환 (행 54-57): 사용자 지역 비중 + 사용자 zone 월별 COP
+    kwh = calc_kwh_data(user_fuel_input_kwh, user_heat_demand_kwh, monthly_ratios, MONTHLY_COP[zone])
 
     # ─── [동적 계산] 모든 요금제 — 거창군 묶임 완전 해제 ─────────────
     # 사용자 지역의 실제 HP kWh + 가전 평균 사용량 + 광역시도별 태양광 발전량으로
@@ -1194,13 +1237,15 @@ if st.session_state.analyzed:
 </div>
 """, unsafe_allow_html=True)
 
-    # ─── 8-4-2. 에너지 효율 비교 박스 (Sheet2 kWh 기반) ───────────────
+    # ─── 8-4-2. 에너지 효율 비교 박스 (Sheet2 행 43 + 행 54-57 기반) ─────
+    # 기존: 행 43 (실제 사용량) — 사용자가 실제 소비하는 연료 에너지
+    # HP:   행 54-57 합 — HP로 전환 시 전기 사용량
     fuel_unit_label = "도시가스" if "도시가스" in fuel_key else fuel_key
     st.markdown(f"""
 <div class='saving-box' style='background:var(--bg-teal); border-color:var(--border-teal);'>
   <p class='saving-title' style='color:#134e4a;'>⚡ 우리 가족의 1년 에너지 사용량</p>
   <p class='saving-sub' style='color:#0f766e;'>
-    기존 보일러로는 연간 <b>{kwh['annual_demand']:,.0f} kWh</b>의 {fuel_unit_label} 에너지가 필요해요.
+    기존 보일러로는 연간 <b>{kwh['fuel_input_annual']:,.0f} kWh</b>의 {fuel_unit_label} 에너지가 필요해요.
     <br>
     히트펌프로 바꾸면 같은 따뜻함을 만드는 데 <b>전기 {kwh['annual_hp']:,.0f} kWh</b>면 충분합니다 —
     🔥 <b>약 {kwh['efficiency']}배 효율</b>로 같은 난방을 1/{kwh['efficiency']:.0f} 에너지로!
@@ -1253,15 +1298,48 @@ if st.session_state.analyzed:
     st.markdown('<div class="section-title">📈 장기 시뮬레이션</div>', unsafe_allow_html=True)
     g1, g2 = st.columns(2)
     with g1:
-        st.write("**누적 비용 흐름**")
-        df_cum = pd.DataFrame({"연도": years, "기존": gas_cum, "HP": hp_cum}) \
-                   .melt("연도", var_name="시나리오", value_name="비용")
+        st.write("**투자 회수 곡선** — 누적 순이익")
+        # 0년차(=설치 시점, -투자비)부터 시작하여 매년 절감액만큼 회복
+        # 손익분기점(0) 아래는 빨강, 위는 초록으로 시각화
+        profit_series = [-net_capex_man] + list(net_profit)
+        df_net = pd.DataFrame({
+            "연차": list(range(0, 16)),
+            "누적순이익": profit_series,
+            "수익영역": [max(p, 0) for p in profit_series],
+            "손실영역": [min(p, 0) for p in profit_series],
+        })
+        # 손실 영역 (음수, 빨강)
+        neg_area = alt.Chart(df_net).mark_area(
+            opacity=0.45, color="#fca5a5", interpolate='monotone'
+        ).encode(
+            x=alt.X("연차:O", title="연차", axis=alt.Axis(labelAngle=0)),
+            y=alt.Y("손실영역:Q", title="누적 순이익 (만원)"),
+        )
+        # 수익 영역 (양수, 초록)
+        pos_area = alt.Chart(df_net).mark_area(
+            opacity=0.45, color="#86efac", interpolate='monotone'
+        ).encode(
+            x=alt.X("연차:O"),
+            y=alt.Y("수익영역:Q"),
+        )
+        # 손익분기점 (0) 점선
+        zero_line = alt.Chart(pd.DataFrame({"y": [0]})).mark_rule(
+            strokeDash=[6, 4], color="#64748b", strokeWidth=1.5
+        ).encode(y=alt.Y("y:Q"))
+        # 메인 라인 + 포인트 (전체 곡선, 다크 틸)
+        line = alt.Chart(df_net).mark_line(
+            color="#0f766e", strokeWidth=2.5, interpolate='monotone',
+            point=alt.OverlayMarkDef(filled=True, size=50, color='#0f766e')
+        ).encode(
+            x=alt.X("연차:O"),
+            y=alt.Y("누적순이익:Q"),
+            tooltip=[
+                alt.Tooltip("연차:O", title="연차"),
+                alt.Tooltip("누적순이익:Q", format=",.0f", title="누적 순이익(만원)")
+            ]
+        )
         st.altair_chart(
-            alt.Chart(df_cum).mark_area(opacity=0.5).encode(
-                x=alt.X("연도:O", axis=alt.Axis(labelAngle=0)),
-                y=alt.Y("비용:Q"),
-                color=alt.Color("시나리오:N"),
-            ).properties(height=380),
+            (neg_area + pos_area + zero_line + line).properties(height=380),
             use_container_width=True
         )
     with g2:
