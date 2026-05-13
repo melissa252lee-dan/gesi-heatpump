@@ -518,7 +518,7 @@ def calc_annual_co2_emissions(fuel_key, emission_15yr, year_idx=0):
     }
 
 
-def calc_fuel_input_kwh(annual_cost_won, fuel_key, sheet2_params):
+def calc_fuel_input_kwh(annual_cost_won, fuel_key, sheet2_params, heating_share=None):
     """Sheet2 행 43 수식 — 실제 난방 에너지 사용량 (kWh).
 
     사용자가 1년 동안 실제로 소비하는 연료 에너지량 (효율 적용 전).
@@ -526,10 +526,15 @@ def calc_fuel_input_kwh(annual_cost_won, fuel_key, sheet2_params):
 
     수식 (도시가스):  (연간요금 - 기본요금×12) ÷ 단가 × 난방비중
     수식 (등유/LPG):  연간요금 ÷ 단가  (기본료 0, 난방비중 미적용)
+
+    Args:
+        heating_share: 엑셀 Sheet2!C14 — 도시가스 사용 중 난방이 차지하는 비중
+                       None이면 sheet2_params의 기본값 사용
+                       엑셀 공식: 취사가 도시가스/LPG면 0.8475, 인덕션이면 1.0
     """
     base_fee = sheet2_params["base_fee"][fuel_key]
     rate     = sheet2_params["rate"][fuel_key]
-    share    = sheet2_params["heating_share"]
+    share    = heating_share if heating_share is not None else sheet2_params["heating_share"]
     if rate <= 0: return 0
     fuel_input_kwh = (annual_cost_won - base_fee * 12) / rate
     if "도시가스" in fuel_key:                # 도시가스만 난방비중 적용
@@ -1026,8 +1031,12 @@ if st.session_state.analyzed:
     # 에너지 사용량 (kWh) — Sheet2 2단계 모델
     # 사용자 연간 난방비 = 1월 입력 ÷ 1월 비중 (지역별)
     user_annual_cost_won = winter_heat_man * 10000 / monthly_ratios[0] if monthly_ratios[0] > 0 else 0
+    # 엑셀 Sheet2!C14 공식: 취사가 도시가스/LPG면 0.8475(가스 일부가 취사로 빠짐), 인덕션이면 1.0
+    user_heating_share = 0.8475 if cooking_type in ("도시가스", "LPG") else 1.0
     # Sheet2 행 43 — 실제 난방 에너지 사용량 (연료 입력, 효율 적용 전)
-    user_fuel_input_kwh = calc_fuel_input_kwh(user_annual_cost_won, fuel_key, SHEET2_PARAMS)
+    user_fuel_input_kwh = calc_fuel_input_kwh(
+        user_annual_cost_won, fuel_key, SHEET2_PARAMS, heating_share=user_heating_share
+    )
     # Sheet2 행 44 — 유효 열 수요 (= HP가 만들어야 할 열량, 효율 적용 후)
     user_heat_demand_kwh = calc_heat_demand_kwh(user_fuel_input_kwh, fuel_key, SHEET2_PARAMS)
     # 월별 분배 (행 46-49) + HP 변환 (행 54-57): 사용자 지역 비중 + 사용자 zone 월별 COP
