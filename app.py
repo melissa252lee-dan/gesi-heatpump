@@ -1319,78 +1319,128 @@ if st.session_state.analyzed:
     # ─── 8-7. 장기 차트 ──────────────────────────────────────────────
     st.markdown('<div class="section-title">📈 장기 시뮬레이션</div>', unsafe_allow_html=True)
 
-    # net_profit은 simulate_15yr에서 이미 계산됨:
-    #   누적 절감액 - 투자비 → 음수=회수 전, 양수=회수 후
-    df_profit = pd.DataFrame({
-        "연차": years,
-        "누적순이익": net_profit,
-        "구분": ["수익" if p >= 0 else "손실" for p in net_profit],
-    })
+    g_long_l, g_long_r = st.columns(2)
 
-    final_label_df = pd.DataFrame({
-        "연차": [years[-1]],
-        "누적순이익": [net_profit[-1]],
-        "label": [f"{net_profit[-1]:,}만원"],
-    })
+    # ─── 왼쪽: 15년 총비용 도넛 ────────────────────────────────────
+    with g_long_l:
+        total_ex_15yr = gas_cum[-1]
+        total_hp_15yr = hp_cum[-1]
+        saving_15yr   = total_ex_15yr - total_hp_15yr
 
-    bars = alt.Chart(df_profit).mark_bar(cornerRadiusEnd=2).encode(
-        x=alt.X("연차:O", title=None,
-                scale=alt.Scale(paddingInner=0.08, paddingOuter=0.05),
-                axis=alt.Axis(
-                    labelAngle=0,
-                    # 1·5·10·15년차만 라벨 노출 (모바일 가독성)
-                    labelExpr=(
-                        "(datum.value == 1 || datum.value == 5 || "
-                        "datum.value == 10 || datum.value == 15) "
-                        "? datum.value + '년차' : ''"
-                    ),
-                )),
-        y=alt.Y("누적순이익:Q",
-                title="누적 순이익 (만원)",
-                axis=alt.Axis(format=",d")),
-        color=alt.Color("구분:N",
-                        scale=alt.Scale(domain=["수익", "손실"],
-                                        range=["#2563eb", "#7dd3fc"]),
-                        legend=alt.Legend(orient="top", title=None,
-                                          direction="horizontal")),
-        tooltip=[
-            alt.Tooltip("연차:O"),
-            alt.Tooltip("누적순이익:Q", format=",.0f", title="누적 순이익(만원)"),
-            alt.Tooltip("구분:N"),
-        ],
-    )
+        df_donut = pd.DataFrame({
+            "구분": [f"기존 ({fuel_key})", "HP (전기+투자비)"],
+            "금액": [total_ex_15yr, total_hp_15yr],
+        })
 
-    # 0 기준선 (회수 시점 표시)
-    zero_rule = alt.Chart(pd.DataFrame({"y": [0]})).mark_rule(
-        color="#a8a29e", strokeWidth=1
-    ).encode(y="y:Q")
-
-    # 최종 값 라벨
-    final_label = alt.Chart(final_label_df).mark_text(
-        align="center",
-        baseline="bottom" if net_profit[-1] >= 0 else "top",
-        dy=-6 if net_profit[-1] >= 0 else 6,
-        fontSize=13, fontWeight="bold",
-        color="#1c1917",
-    ).encode(
-        x=alt.X("연차:O"),
-        y=alt.Y("누적순이익:Q"),
-        text="label:N",
-    )
-
-    st.altair_chart(
-        (bars + zero_rule + final_label).properties(
-            height=420,
-            title=alt.TitleParams(
-                text="연도별 누적 순이익 (만원)",
-                anchor="start",
-                fontSize=14,
-                color="#1c1917",
-                offset=10,
+        donut = alt.Chart(df_donut).mark_arc(innerRadius=75, outerRadius=130).encode(
+            theta=alt.Theta("금액:Q", stack=True),
+            color=alt.Color(
+                "구분:N",
+                scale=alt.Scale(
+                    domain=[f"기존 ({fuel_key})", "HP (전기+투자비)"],
+                    range=["#94a3b8", "#2563eb"],
+                ),
+                legend=alt.Legend(orient="bottom", title=None, direction="horizontal"),
             ),
-        ),
-        use_container_width=True
-    )
+            tooltip=[
+                alt.Tooltip("구분:N"),
+                alt.Tooltip("금액:Q", format=",.0f", title="15년 누적(만원)"),
+            ],
+        )
+
+        # 도넛 중앙 — 절감액 강조 (두 줄)
+        center_label = alt.Chart(pd.DataFrame({"v": ["15년 총 절감"]})).mark_text(
+            fontSize=12, color="#78716c", dy=-12,
+        ).encode(text="v:N")
+        center_value = alt.Chart(pd.DataFrame({"v": [f"{saving_15yr:,}만원"]})).mark_text(
+            fontSize=22, fontWeight="bold", color="#047857", dy=12,
+        ).encode(text="v:N")
+
+        st.altair_chart(
+            (donut + center_label + center_value).properties(
+                height=420,
+                title=alt.TitleParams(
+                    text="15년 총비용 비교 (만원)",
+                    anchor="start", fontSize=14, color="#1c1917", offset=10,
+                ),
+            ),
+            use_container_width=True,
+        )
+
+    # ─── 오른쪽: 연도별 누적 순이익 막대 ──────────────────────────
+    with g_long_r:
+        # net_profit은 simulate_15yr에서 이미 계산됨:
+        #   누적 절감액 - 투자비 → 음수=회수 전, 양수=회수 후
+        df_profit = pd.DataFrame({
+            "연차": years,
+            "누적순이익": net_profit,
+            "구분": ["수익" if p >= 0 else "손실" for p in net_profit],
+        })
+
+        final_label_df = pd.DataFrame({
+            "연차": [years[-1]],
+            "누적순이익": [net_profit[-1]],
+            "label": [f"{net_profit[-1]:,}만원"],
+        })
+
+        bars = alt.Chart(df_profit).mark_bar(cornerRadiusEnd=2).encode(
+            x=alt.X("연차:O", title=None,
+                    scale=alt.Scale(paddingInner=0.08, paddingOuter=0.05),
+                    axis=alt.Axis(
+                        labelAngle=0,
+                        # 1·5·10·15년차만 라벨 노출 (모바일 가독성)
+                        labelExpr=(
+                            "(datum.value == 1 || datum.value == 5 || "
+                            "datum.value == 10 || datum.value == 15) "
+                            "? datum.value + '년차' : ''"
+                        ),
+                    )),
+            y=alt.Y("누적순이익:Q",
+                    title="누적 순이익 (만원)",
+                    axis=alt.Axis(format=",d")),
+            color=alt.Color("구분:N",
+                            scale=alt.Scale(domain=["수익", "손실"],
+                                            range=["#2563eb", "#7dd3fc"]),
+                            legend=alt.Legend(orient="top", title=None,
+                                              direction="horizontal")),
+            tooltip=[
+                alt.Tooltip("연차:O"),
+                alt.Tooltip("누적순이익:Q", format=",.0f", title="누적 순이익(만원)"),
+                alt.Tooltip("구분:N"),
+            ],
+        )
+
+        # 0 기준선 (회수 시점 표시)
+        zero_rule = alt.Chart(pd.DataFrame({"y": [0]})).mark_rule(
+            color="#a8a29e", strokeWidth=1
+        ).encode(y="y:Q")
+
+        # 최종 값 라벨
+        final_label = alt.Chart(final_label_df).mark_text(
+            align="center",
+            baseline="bottom" if net_profit[-1] >= 0 else "top",
+            dy=-6 if net_profit[-1] >= 0 else 6,
+            fontSize=13, fontWeight="bold",
+            color="#1c1917",
+        ).encode(
+            x=alt.X("연차:O"),
+            y=alt.Y("누적순이익:Q"),
+            text="label:N",
+        )
+
+        st.altair_chart(
+            (bars + zero_rule + final_label).properties(
+                height=420,
+                title=alt.TitleParams(
+                    text="연도별 누적 순이익 (만원)",
+                    anchor="start",
+                    fontSize=14,
+                    color="#1c1917",
+                    offset=10,
+                ),
+            ),
+            use_container_width=True
+        )
 
     # ─── 8-7-2. 환경 효과 (Sheet2 행 65~79 활용 — 2026~2040) ────
     # 그리드 청정화로 HP 배출량이 매년 감소 — 2026년 vs 2040년 효과 비교
