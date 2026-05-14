@@ -202,6 +202,13 @@ SHEET2_HP_KWH_ROWS = {          # 월별 HP 전력 사용량 (Excel 행 54-57)
 }
 SHEET2_CO2_DATA_START_ROW = 66  # 15년 CO₂ 데이터 시작 (행 66 = 2026년)
 
+# ── HP 배출계수의 분자 (한국 전력 그리드 평균 배출계수) ──
+# 엑셀 Sheet2!I10 = 0.4173 / sCOP[zone]   (2025년)
+# 엑셀 Sheet2!J10 = (83.1/624.5) / sCOP[zone]  (2038년, 그리드 청정화 반영)
+# 사용자 기후존(중부1/중부2/남부/제주)에 따라 sCOP가 다르므로 HP 배출계수도 동적으로 계산.
+GRID_EF_2025_KGKWH = 0.4173          # kg CO2 / kWh — 한국 전력 그리드 (2025년)
+GRID_EF_2038_KGKWH = 83.1 / 624.5    # ≈ 0.13306 — 2038년 그리드 (청정화 반영)
+
 # ── Sheet3 광역 시도별 월별 난방 비중 매핑 ──
 # 사이트의 약식 시도명 → Sheet3의 정식 명칭
 REGION_NAME_MAP = {
@@ -291,7 +298,7 @@ def load_tariff_xlsx():
         scop, hdd, monthly_cop, monthly_temp = {}, {}, {}, {}
         for zone, r_temp in zone_rows.items():
             r_hdd, r_cop = r_temp + 1, r_temp + 2
-            scop[zone] = round(float(ws_cop.cell(row=r_temp, column=16).value or 0), 2)
+            scop[zone] = float(ws_cop.cell(row=r_temp, column=16).value or 0)  # raw — CO2 계산용 정확값
             monthly_temp[zone] = [float(ws_cop.cell(row=r_temp, column=3+m).value or 0) for m in range(12)]
             hdd[zone]          = [float(ws_cop.cell(row=r_hdd,  column=3+m).value or 0) for m in range(12)]
             monthly_cop[zone]  = [float(ws_cop.cell(row=r_cop,  column=3+m).value or 0) for m in range(12)]
@@ -1148,6 +1155,11 @@ if st.session_state.analyzed:
     jan_ratio = monthly_ratios[0] if monthly_ratios[0] > 0 else 1
     monthly_ex_man = [round(winter_heat_man * monthly_ratios[m-1] / jan_ratio, 2) for m in months]
     # 연간 CO₂ 배출량 — 엑셀 G66~G80 패턴 (유효 열 수요 × HP 배출계수)
+    # ⚠️ HP 배출계수는 사용자 기후존의 sCOP에 따라 동적 계산 (엑셀 I10/J10 공식)
+    user_scop = SCOP_BY_ZONE[zone]
+    ef_hp_2025 = GRID_EF_2025_KGKWH / user_scop   # 엑셀 I10 = 0.4173 / sCOP[zone]
+    ef_hp_2038 = GRID_EF_2038_KGKWH / user_scop   # 엑셀 J10 = (83.1/624.5) / sCOP[zone]
+
     solar_annual_kwh = sum(monthly_solar) if monthly_solar else 0
     co2 = calc_annual_co2_emissions(
         user_annual_cost_won=user_annual_cost_won,
@@ -1156,8 +1168,8 @@ if st.session_state.analyzed:
         fuel_key=fuel_key,
         sheet2_params=SHEET2_PARAMS,
         emission_factors_fuel=EMISSION_FACTORS_FUEL,
-        emission_factor_hp_2025=EMISSION_FACTOR_HP_2025,
-        emission_factor_hp_2038=EMISSION_FACTOR_HP_2038,
+        emission_factor_hp_2025=ef_hp_2025,
+        emission_factor_hp_2038=ef_hp_2038,
         year_idx=0,
     )
 
@@ -1478,6 +1490,7 @@ if st.session_state.analyzed:
                 unsafe_allow_html=True)
 
     # 15년치 배출량 — 엑셀 G66~G80 패턴 (year_idx로 보간 분기)
+    # HP 배출계수는 위에서 계산한 동적값 (ef_hp_2025/2038) 그대로 사용
     years_15 = list(range(1, 16))
     co2_15yr_dyn = [
         calc_annual_co2_emissions(
@@ -1487,8 +1500,8 @@ if st.session_state.analyzed:
             fuel_key=fuel_key,
             sheet2_params=SHEET2_PARAMS,
             emission_factors_fuel=EMISSION_FACTORS_FUEL,
-            emission_factor_hp_2025=EMISSION_FACTOR_HP_2025,
-            emission_factor_hp_2038=EMISSION_FACTOR_HP_2038,
+            emission_factor_hp_2025=ef_hp_2025,
+            emission_factor_hp_2038=ef_hp_2038,
             year_idx=y,
         ) for y in range(15)
     ]
