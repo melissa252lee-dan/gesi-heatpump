@@ -1318,46 +1318,77 @@ if st.session_state.analyzed:
 
     # ─── 8-7. 장기 차트 ──────────────────────────────────────────────
     st.markdown('<div class="section-title">📈 장기 시뮬레이션</div>', unsafe_allow_html=True)
-    st.write("**누적 절감액 vs 투자비** — 운영비 절감만으로 투자비 회수")
-    # 매년 가스보일러 대비 HP 운영비 절감 (인플레이션 반영)
-    # 투자비를 제외한 순수 운영 절감액을 누적해서 보여줌
-    annual_savings = [
-        ann_heat_base * ((1 + fuel_inflation / 100) ** y) -
-        ann_hp_op     * ((1 + elec_inflation / 100) ** y)
-        for y in years
-    ]
-    cum_sav = []
-    _running = 0.0
-    for s in annual_savings:
-        _running += s
-        cum_sav.append(round(_running, 0))
-    df_sav = pd.DataFrame({"연차": years, "누적절감액": cum_sav})
-    # 메인 영역 — 누적 절감액 (초록)
-    area = alt.Chart(df_sav).mark_area(
-        opacity=0.45, color="#10b981",
-        line={'color': '#047857', 'strokeWidth': 2.5},
-        point=alt.OverlayMarkDef(filled=True, size=60, color='#047857'),
-    ).encode(
-        x=alt.X("연차:O", title="연차", axis=alt.Axis(labelAngle=0)),
-        y=alt.Y("누적절감액:Q", title="누적 절감액 (만원)"),
+    st.write("**연도별 누적 순이익** — 투자비 회수 전(손실)에서 회수 후(수익)로 전환")
+
+    # net_profit은 simulate_15yr에서 이미 계산됨:
+    #   누적 절감액 - 투자비 → 음수=회수 전, 양수=회수 후
+    df_profit = pd.DataFrame({
+        "연차": years,
+        "누적순이익": net_profit,
+        "구분": ["수익" if p >= 0 else "손실" for p in net_profit],
+    })
+
+    final_label_df = pd.DataFrame({
+        "연차": [years[-1]],
+        "누적순이익": [net_profit[-1]],
+        "label": [f"{net_profit[-1]:,}만원"],
+    })
+
+    bars = alt.Chart(df_profit).mark_bar(size=18, cornerRadiusEnd=2).encode(
+        x=alt.X("연차:O", title=None,
+                axis=alt.Axis(
+                    labelAngle=0,
+                    # 1·5·10·15년차만 라벨 노출 (모바일 가독성)
+                    labelExpr=(
+                        "(datum.value == 1 || datum.value == 5 || "
+                        "datum.value == 10 || datum.value == 15) "
+                        "? datum.value + '년차' : ''"
+                    ),
+                )),
+        y=alt.Y("누적순이익:Q",
+                title="누적 순이익 (만원)",
+                axis=alt.Axis(format=",d")),
+        color=alt.Color("구분:N",
+                        scale=alt.Scale(domain=["수익", "손실"],
+                                        range=["#2563eb", "#dc2626"]),
+                        legend=alt.Legend(orient="top", title=None,
+                                          direction="horizontal")),
         tooltip=[
             alt.Tooltip("연차:O"),
-            alt.Tooltip("누적절감액:Q", format=",.0f", title="누적 절감액(만원)"),
-        ]
+            alt.Tooltip("누적순이익:Q", format=",.0f", title="누적 순이익(만원)"),
+            alt.Tooltip("구분:N"),
+        ],
     )
-    # 투자비 가로 점선 — 회수 기준선
-    capex_line = alt.Chart(pd.DataFrame({"y": [net_capex_man]})).mark_rule(
-        strokeDash=[6, 4], color="#dc2626", strokeWidth=2
-    ).encode(y=alt.Y("y:Q"))
-    # 투자비 라벨 (오른쪽 상단)
-    capex_label = alt.Chart(pd.DataFrame({
-        "x": [years[-1]], "y": [net_capex_man], "label": [f"투자비 {net_capex_man}만원 (회수 기준선)"]
-    })).mark_text(
-        align="right", baseline="bottom", dy=-4,
-        color="#dc2626", fontSize=12, fontWeight="bold"
-    ).encode(x=alt.X("x:O"), y=alt.Y("y:Q"), text="label:N")
+
+    # 0 기준선 (회수 시점 표시)
+    zero_rule = alt.Chart(pd.DataFrame({"y": [0]})).mark_rule(
+        color="#a8a29e", strokeWidth=1
+    ).encode(y="y:Q")
+
+    # 최종 값 라벨
+    final_label = alt.Chart(final_label_df).mark_text(
+        align="center",
+        baseline="bottom" if net_profit[-1] >= 0 else "top",
+        dy=-6 if net_profit[-1] >= 0 else 6,
+        fontSize=13, fontWeight="bold",
+        color="#1c1917",
+    ).encode(
+        x=alt.X("연차:O"),
+        y=alt.Y("누적순이익:Q"),
+        text="label:N",
+    )
+
     st.altair_chart(
-        (area + capex_line + capex_label).properties(height=420),
+        (bars + zero_rule + final_label).properties(
+            height=420,
+            title=alt.TitleParams(
+                text="연도별 누적 순이익 (만원)",
+                anchor="start",
+                fontSize=14,
+                color="#1c1917",
+                offset=10,
+            ),
+        ),
         use_container_width=True
     )
 
