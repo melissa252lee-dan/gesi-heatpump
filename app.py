@@ -365,6 +365,9 @@ def load_tariff_xlsx():
         # 22년 전국 가구패널 기준 평균 가전 전력 사용량
         appliance_kwh = [float(ws.cell(row=23+m, column=3).value or 0) for m in range(12)]
 
+        # ── Sheet2 행 25 — 월별 전기요금 비중 (사용자 입력 1월 kWh → 12개월 분배용) ──
+        elec_monthly_ratios = [float(ws_s2.cell(row=25, column=3+m).value or 0) for m in range(12)]
+
         # ── 전기요금 시트 — 17개 시도별 월별 태양광 발전량 (col 37=시도, col 39-50=1~12월) ──
         # 1kW 패널당 발전량 kWh
         solar_kwh_by_region = {}
@@ -384,6 +387,7 @@ def load_tariff_xlsx():
             "sheet2_params":  sheet2_params,
             "region_ratios":  region_ratios,
             "appliance_kwh":  appliance_kwh,
+            "elec_monthly_ratios": elec_monthly_ratios,
             "solar_kwh":      solar_kwh_by_region,
             "emission_factors_fuel":   emission_factors_fuel,
             "emission_factor_hp_2025": emission_factor_hp_2025,
@@ -882,7 +886,8 @@ if excel_data:
     KWH_HP        = excel_data["kwh_hp"]        # Sheet2: 연료별 월별 HP 전력 사용량 (참고용)
     SHEET2_PARAMS = excel_data["sheet2_params"] # Sheet2: 연료별 효율/단가/기본요금/난방비중
     REGION_RATIOS = excel_data["region_ratios"] # Sheet3: 광역시도별 월별 난방 비중
-    APPLIANCE_KWH = excel_data["appliance_kwh"] # 전기요금 시트: 가전 월별 평균 사용량 (전국, 12개)
+    APPLIANCE_KWH = excel_data["appliance_kwh"] # 전기요금 시트: 가전 월별 평균 사용량 (전국, 12개) — 사용자 입력 없을 때 fallback
+    ELEC_MONTHLY_RATIOS = excel_data["elec_monthly_ratios"]  # Sheet2 행 25: 월별 전기요금 비중 (합=1)
     SOLAR_KWH     = excel_data["solar_kwh"]     # 전기요금 시트: 17개 시도 월별 1kW당 태양광 발전량
     EMISSION_FACTORS_FUEL   = excel_data["emission_factors_fuel"]    # Sheet2 행 10 col 5-8: 연료별 배출계수 (kg/kWh)
     EMISSION_FACTOR_HP_2025 = excel_data["emission_factor_hp_2025"]  # Sheet2 행 10 col 9: HP 2025년 배출계수
@@ -979,7 +984,10 @@ col_h, col_e = st.columns(2)
 with col_h:
     winter_heat_man = st.number_input("동절기(1월) 평균 난방비 (만원)", value=20)
 with col_e:
-    winter_elec_man = st.number_input("동절기(1월) 전기요금 (만원)", value=6)
+    winter_elec_kwh = st.number_input(
+        "동절기(1월) 전기 사용량 (kWh)", value=305, min_value=0,
+        help="한전 청구서의 '1월 사용량(kWh)'을 입력해 주세요. 4인 가구 평균은 약 300 kWh입니다.",
+    )
 
 col_ht, col_ck = st.columns(2)
 with col_ht:
@@ -1047,7 +1055,7 @@ else:
     tariff_label = f"{tariff_choice_simple} (태양광 미설치)"
 
 # 입력 변경 감지 → 분석 결과 초기화
-_input_signature = (winter_heat_man, winter_elec_man, region, house_type, house_size,
+_input_signature = (winter_heat_man, winter_elec_kwh, region, house_type, house_size,
                     heating_type, cooking_type, fuel_inflation, elec_inflation,
                     solar_capa_kw, use_subsidy, tariff_label)
 if st.session_state.get("_last_input_key") != _input_signature:
@@ -1102,10 +1110,18 @@ if st.session_state.analyzed:
     # HP 용량 (계산용 숫자 — get_hp_specs는 문자열 "6 kW"라 별도 헬퍼 사용)
     hp_capa_for_calc = get_hp_capacity_kw(house_size)
 
+    # 사용자 입력 1월 전기사용량(kWh)을 월별 비중(Sheet2 행 25)으로 12개월 분배
+    # 엑셀 Sheet2!D24:N24 수식과 동일: =$C$24/$C$25*X25
+    if ELEC_MONTHLY_RATIOS[0] > 0:
+        user_annual_elec_kwh = winter_elec_kwh / ELEC_MONTHLY_RATIOS[0]
+        user_monthly_appliance_kwh = [user_annual_elec_kwh * r for r in ELEC_MONTHLY_RATIOS]
+    else:
+        user_monthly_appliance_kwh = APPLIANCE_KWH  # fallback
+
     result = calc_dynamic_result(
         tariff_label=tariff_label,
         monthly_hp_kwh=kwh["monthly_hp"],
-        monthly_appliance_kwh=APPLIANCE_KWH,
+        monthly_appliance_kwh=user_monthly_appliance_kwh,
         monthly_solar_kwh=monthly_solar,
         hp_capacity_kw=hp_capa_for_calc,
         ex_annual_won=user_annual_cost_won,
@@ -1321,7 +1337,7 @@ if st.session_state.analyzed:
 
     g_long_l, g_long_r = st.columns(2)
 
-    # ─── 왼쪽: 15년 총비용 도넛 ────────────────────────────────────
+    # ─── 왼쪽: 15년 총비용 도넛 + 색 카드 ─────────────────────────
     with g_long_l:
         total_ex_15yr = gas_cum[-1]
         total_hp_15yr = hp_cum[-1]
@@ -1331,7 +1347,7 @@ if st.session_state.analyzed:
             "금액": [total_ex_15yr, total_hp_15yr],
         })
 
-        donut = alt.Chart(df_donut).mark_arc(innerRadius=75, outerRadius=130).encode(
+        donut = alt.Chart(df_donut).mark_arc(innerRadius=70, outerRadius=120).encode(
             theta=alt.Theta("금액:Q", stack=True),
             color=alt.Color(
                 "구분:N",
@@ -1339,7 +1355,7 @@ if st.session_state.analyzed:
                     domain=[f"기존 ({fuel_key})", "HP (전기+투자비)"],
                     range=["#94a3b8", "#2563eb"],
                 ),
-                legend=alt.Legend(orient="bottom", title=None, direction="horizontal"),
+                legend=None,
             ),
             tooltip=[
                 alt.Tooltip("구분:N"),
@@ -1349,10 +1365,7 @@ if st.session_state.analyzed:
 
         # 각 조각 위 금액 라벨 (도넛 두께 중간)
         arc_labels = alt.Chart(df_donut).mark_text(
-            radius=102,
-            fontSize=14,
-            fontWeight="bold",
-            color="white",
+            radius=95, fontSize=15, fontWeight="bold", color="white",
         ).encode(
             theta=alt.Theta("금액:Q", stack=True),
             text=alt.Text("금액:Q", format=",d"),
@@ -1360,7 +1373,7 @@ if st.session_state.analyzed:
 
         st.altair_chart(
             (donut + arc_labels).properties(
-                height=420,
+                height=340,
                 title=alt.TitleParams(
                     text="15년 총비용 비교 (만원)",
                     anchor="start", fontSize=14, color="#1c1917", offset=10,
@@ -1368,6 +1381,20 @@ if st.session_state.analyzed:
             ),
             use_container_width=True,
         )
+
+        # 색깔 매칭 카드 — 회색=기존, 파랑=히트펌프 명시
+        st.markdown(f"""
+<div style='display:flex; gap:10px; margin-top:4px;'>
+  <div style='flex:1; padding:10px 14px; border-radius:8px; border-left:5px solid #94a3b8; background:#f5f5f4;'>
+    <div style='font-size:0.82rem; color:#78716c; margin-bottom:4px;'>● 기존 ({fuel_key})</div>
+    <div style='font-size:1.15rem; font-weight:700; color:#1c1917;'>{total_ex_15yr:,}만원</div>
+  </div>
+  <div style='flex:1; padding:10px 14px; border-radius:8px; border-left:5px solid #2563eb; background:#eff6ff;'>
+    <div style='font-size:0.82rem; color:#78716c; margin-bottom:4px;'>● 히트펌프 (전기+투자비)</div>
+    <div style='font-size:1.15rem; font-weight:700; color:#2563eb;'>{total_hp_15yr:,}만원</div>
+  </div>
+</div>
+""", unsafe_allow_html=True)
 
     # ─── 오른쪽: 연도별 누적 순이익 막대 ──────────────────────────
     with g_long_r:
