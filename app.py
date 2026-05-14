@@ -1004,7 +1004,7 @@ with col_sim:
         "태양광 설치 여부",
         ["예", "아니오"],
         horizontal=True,
-        index=1,
+        index=0,
     )
     solar_capa_kw  = st.number_input(
         "태양광 용량 (kW)",
@@ -1318,7 +1318,6 @@ if st.session_state.analyzed:
 
     # ─── 8-7. 장기 차트 ──────────────────────────────────────────────
     st.markdown('<div class="section-title">📈 장기 시뮬레이션</div>', unsafe_allow_html=True)
-    st.write("**연도별 누적 순이익** — 투자비 회수 전(손실)에서 회수 후(수익)로 전환")
 
     # net_profit은 simulate_15yr에서 이미 계산됨:
     #   누적 절감액 - 투자비 → 음수=회수 전, 양수=회수 후
@@ -1334,8 +1333,9 @@ if st.session_state.analyzed:
         "label": [f"{net_profit[-1]:,}만원"],
     })
 
-    bars = alt.Chart(df_profit).mark_bar(size=18, cornerRadiusEnd=2).encode(
+    bars = alt.Chart(df_profit).mark_bar(cornerRadiusEnd=2).encode(
         x=alt.X("연차:O", title=None,
+                scale=alt.Scale(paddingInner=0.08, paddingOuter=0.05),
                 axis=alt.Axis(
                     labelAngle=0,
                     # 1·5·10·15년차만 라벨 노출 (모바일 가독성)
@@ -1350,7 +1350,7 @@ if st.session_state.analyzed:
                 axis=alt.Axis(format=",d")),
         color=alt.Color("구분:N",
                         scale=alt.Scale(domain=["수익", "손실"],
-                                        range=["#2563eb", "#dc2626"]),
+                                        range=["#2563eb", "#7dd3fc"]),
                         legend=alt.Legend(orient="top", title=None,
                                           direction="horizontal")),
         tooltip=[
