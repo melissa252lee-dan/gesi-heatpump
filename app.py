@@ -985,7 +985,7 @@ with col_h:
     winter_heat_man = st.number_input("동절기(1월) 평균 난방비 (만원)", value=20)
 with col_e:
     winter_elec_kwh = st.number_input(
-        "동절기(1월) 전기 사용량 (kWh)", value=305, min_value=0,
+        "동절기(1월) 전기 사용량 (kWh)", value=0, min_value=0,
         help="한전 청구서의 '1월 사용량(kWh)'을 입력해 주세요. 4인 가구 평균은 약 300 kWh입니다.",
     )
 
