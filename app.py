@@ -1325,7 +1325,6 @@ if st.session_state.analyzed:
     with g_long_l:
         total_ex_15yr = gas_cum[-1]
         total_hp_15yr = hp_cum[-1]
-        saving_15yr   = total_ex_15yr - total_hp_15yr
 
         df_donut = pd.DataFrame({
             "구분": [f"기존 ({fuel_key})", "HP (전기+투자비)"],
@@ -1348,16 +1347,19 @@ if st.session_state.analyzed:
             ],
         )
 
-        # 도넛 중앙 — 절감액 강조 (두 줄)
-        center_label = alt.Chart(pd.DataFrame({"v": ["15년 총 절감"]})).mark_text(
-            fontSize=12, color="#78716c", dy=-12,
-        ).encode(text="v:N")
-        center_value = alt.Chart(pd.DataFrame({"v": [f"{saving_15yr:,}만원"]})).mark_text(
-            fontSize=22, fontWeight="bold", color="#047857", dy=12,
-        ).encode(text="v:N")
+        # 각 조각 위 금액 라벨 (도넛 두께 중간)
+        arc_labels = alt.Chart(df_donut).mark_text(
+            radius=102,
+            fontSize=14,
+            fontWeight="bold",
+            color="white",
+        ).encode(
+            theta=alt.Theta("금액:Q", stack=True),
+            text=alt.Text("금액:Q", format=",d"),
+        )
 
         st.altair_chart(
-            (donut + center_label + center_value).properties(
+            (donut + arc_labels).properties(
                 height=420,
                 title=alt.TitleParams(
                     text="15년 총비용 비교 (만원)",
