@@ -455,22 +455,28 @@ def get_block_key(tariff_label, heating_ui):
 
 
 def get_hp_specs(h_size_pyung):
-    """전용면적(평) → (설치 공간 비유, 치수, HP 용량)."""
-    if h_size_pyung < 20:
-        return ("소형 냉장고 크기",   "595 × 625 mm",   "6 kW")
-    if h_size_pyung <= 28:
-        return ("워시타워 1대 크기", "800 × 1,115 mm", "10 kW")
+    """전용면적(평) → (설치 공간 비유, 치수, HP 용량).
+
+    적정 용량 기준:
+      • 25평 이하    → 12 kW
+      • 26~35평 이하 → 16 kW
+      • 36평 이상    → 20 kW
+    """
+    if h_size_pyung <= 25:
+        return ("워시타워 1대 크기", "800 × 1,115 mm",   "12 kW")
     if h_size_pyung <= 35:
-        return ("워시타워 1대 크기", "800 × 1,115 mm", "12 kW")
-    return     ("보일러실 크기",     "1,120 × 1,666 mm", "16 kW")
+        return ("보일러실 크기",     "1,120 × 1,666 mm", "16 kW")
+    return     ("대형 보일러실 크기", "1,380 × 1,700 mm", "20 kW")
 
 
 def get_hp_capacity_kw(h_size_pyung):
-    """전용면적(평) → HP 용량 숫자(kW). 계산용."""
-    if h_size_pyung < 20:    return 6
-    if h_size_pyung <= 28:   return 10
-    if h_size_pyung <= 35:   return 12
-    return 16
+    """전용면적(평) → HP 용량 숫자(kW). 계산용.
+
+    25평 이하 12kW / 26~35평 이하 16kW / 36평 이상 20kW.
+    """
+    if h_size_pyung <= 25:   return 12
+    if h_size_pyung <= 35:   return 16
+    return 20
 
 
 def calc_monthly_stats(monthly_ex_man, monthly_hp_man, monthly_ratios,
@@ -1015,8 +1021,31 @@ with col_ck:
 st.markdown('<div class="section-title">3. 시뮬레이션 상수 변수</div>', unsafe_allow_html=True)
 col_sim, col_opt = st.columns(2)
 with col_sim:
-    fuel_inflation = st.slider("가스/등유요금 인상률 (%)", 0.0, 15.0, 0.0)
-    elec_inflation = st.slider("전기요금 인상률 (%)",    0.0, 15.0, 0.0)
+    fuel_inflation = st.slider(
+        "가스/등유요금 인상률 (%)", 0.0, 15.0, 5.0,
+        help="최근 5년 평균 추세를 반영한 참고 기본값(5%)입니다. 자유롭게 조정하세요.",
+    )
+    elec_inflation = st.slider(
+        "전기요금 인상률 (%)", 0.0, 15.0, 4.0,
+        help="최근 5년 평균 추세를 반영한 참고 기본값(4%)입니다. 자유롭게 조정하세요.",
+    )
+    with st.expander("📑 최근 5년 에너지요금은 얼마나 올랐나요? (출처 보기)"):
+        st.markdown("""
+**⚡ 전기요금**
+한국전력 평균 판매단가는 **2021년 108.1원/kWh → 2024년 162.9원/kWh**로 3년간 약 50% 올랐습니다.
+다만 인상은 2022~2023년 에너지 위기 때 집중됐고, **2024~2025년은 사실상 동결** 수준입니다.
+- 급등기 포함 시 연 8~10%, 최근 안정세 기준 연 0~3% → 중간값 **약 4%**를 기본값으로 설정
+- 출처: 한국전력 판매단가 통계 (투데이에너지, 2026.1) · 통계청 2025년 소비자물가동향(전기·가스·수도 +1.9%)
+
+**🔥 도시가스 · 등유**
+도시가스 주택용 요금은 국제 LNG 가격 급등으로 **2022~2023년 큰 폭 상승**(서울 주택용 2022년 한 해 약 39%↑) 후 안정세입니다.
+**2025년 도시가스 소비자물가는 +4.1%**였습니다. 등유는 국제 유가에 연동되어 변동 폭이 크며 최근에는 보합세입니다.
+- 급등기 포함 시 연 6~8%, 최근 기준 연 4% 안팎 → **약 5%**를 기본값으로 설정
+- 출처: 통계청 2025년 연간 소비자물가동향 · 에너지경제연구원(KEEI) 에너지수요전망
+
+> 위 기본값은 **급등기와 안정기를 함께 고려한 보수적 참고치**입니다.
+> 향후 전망(보수적/공격적)에 맞게 슬라이더로 직접 조정해 보세요.
+""")
     solar_install  = st.radio(
         "태양광 설치 여부",
         ["예", "아니오"],
@@ -1226,14 +1255,18 @@ if st.session_state.analyzed:
     )
 
     # ─── 8-4. 환경 기여 박스 (Sheet2 행 65 기반) ─────────────────────
-    # 사용자 입력 기준 — 선택 연료 vs HP 연간 배출량 + 5개 에너지원 비교
+    # 사용자 입력 기준 — 현재 사용 중인 난방 연료 vs HP 연간 배출량만 비교.
+    # (선택하지 않은 다른 연료는 표시하지 않음 — 연료 교체를 권하는 듯한 오해 방지)
     by_fuel_rows = ""
-    fuel_display = {
+    _fuel_label_map = {
         "도시가스(콘덴싱)": "도시가스 (콘덴싱)",
         "도시가스(일반)":   "도시가스 (일반)",
         "등유":            "등유",
         "LPG":             "LPG",
-        "히트펌프":         "히트펌프 (전환 시)",
+    }
+    fuel_display = {
+        fuel_key:   _fuel_label_map.get(fuel_key, fuel_key),
+        "히트펌프": "히트펌프 (전환 시)",
     }
     for f, label in fuel_display.items():
         kg = co2["by_fuel"][f]
