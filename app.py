@@ -458,25 +458,35 @@ def get_hp_specs(h_size_pyung):
     """전용면적(평) → (설치 공간 비유, 치수, HP 용량).
 
     적정 용량 기준:
-      • 25평 이하    → 12 kW
-      • 26~35평 이하 → 16 kW
-      • 36평 이상    → 20 kW
+      • 14평 이하   → 8 kW  (냉장고 크기)
+      • 15~25평     → 12 kW (워시타워 1대 크기)
+      • 26~35평     → 16 kW (보일러실 크기)
+      • 36~40평     → 20 kW (대형 보일러실 크기)
+      • 40평 초과   → 상담 필요 (단일 기기로 부족 — 다중 설치/맞춤 설계 권장)
     """
+    if h_size_pyung <= 14:
+        return ("냉장고 크기",       "700 × 1,800 mm",   "8 kW")
     if h_size_pyung <= 25:
         return ("워시타워 1대 크기", "800 × 1,115 mm",   "12 kW")
     if h_size_pyung <= 35:
         return ("보일러실 크기",     "1,120 × 1,666 mm", "16 kW")
-    return     ("대형 보일러실 크기", "1,380 × 1,700 mm", "20 kW")
+    if h_size_pyung <= 40:
+        return ("대형 보일러실 크기", "1,380 × 1,700 mm", "20 kW")
+    return     ("상담 필요",         "—",                "상담 필요")
 
 
 def get_hp_capacity_kw(h_size_pyung):
     """전용면적(평) → HP 용량 숫자(kW). 계산용.
 
-    25평 이하 12kW / 26~35평 이하 16kW / 36평 이상 20kW.
+    14평 이하 8 / ~25평 12 / ~35평 16 / ~40평 20 / 40평 초과 24(상담 가정).
+    40평 초과는 단일 기기 한계를 넘어 '상담 필요'로 표시하지만,
+    계약전력·요금 계산이 멈추지 않도록 내부적으로는 24kW를 가정한다.
     """
+    if h_size_pyung <= 14:   return 8
     if h_size_pyung <= 25:   return 12
     if h_size_pyung <= 35:   return 16
-    return 20
+    if h_size_pyung <= 40:   return 20
+    return 24
 
 
 def calc_monthly_stats(monthly_ex_man, monthly_hp_man, monthly_ratios,
@@ -866,6 +876,9 @@ def calc_dynamic_result(tariff_label, monthly_hp_kwh, monthly_appliance_kwh,
 def simulate_15yr(net_capex_man, ann_heat_man, ann_hp_man, fuel_inflation_pct, elec_inflation_pct):
     """15년 누적 비용·순이익 시뮬레이션 (인플레이션 복리 적용).
 
+    1년차는 현재 가격(인플레이션 0), 2년차부터 복리 적용 → 지수 (y-1).
+    (이전 버전은 1년차부터 ^y로 한 해 더 붙어 순이익이 과대평가되었음.)
+
     Returns: (years, gas_cum, hp_cum, net_profit, payback_year)
     """
     years = list(range(1, 16))
@@ -874,8 +887,8 @@ def simulate_15yr(net_capex_man, ann_heat_man, ann_hp_man, fuel_inflation_pct, e
     payback = "15년 초과"
 
     for y in years:
-        gas_total += ann_heat_man * ((1 + fuel_inflation_pct / 100) ** y)
-        hp_total  += ann_hp_man   * ((1 + elec_inflation_pct / 100) ** y)
+        gas_total += ann_heat_man * ((1 + fuel_inflation_pct / 100) ** (y - 1))
+        hp_total  += ann_hp_man   * ((1 + elec_inflation_pct / 100) ** (y - 1))
         profit = int(gas_total - hp_total)
         gas_cum.append(int(gas_total))
         hp_cum.append(int(hp_total))
@@ -1228,6 +1241,14 @@ if st.session_state.analyzed:
     m2.metric("15년 순이익", f"{net_profit[-1]:,} 만원")
     m3.metric("히트펌프 설치 공간", hp_space)
     m4.metric("적정 히트펌프 용량", hp_capacity)
+
+    # 40평 초과: 단일 기기 한계 초과 → 전문가 상담 안내
+    if house_size > 40:
+        st.info(
+            "ℹ️ 전용면적 40평 초과 주택은 단일 히트펌프로 충분하지 않을 수 있어, "
+            "여러 대 설치 또는 맞춤 설계를 위한 **전문가 상담**을 권장합니다. "
+            "아래 경제성 수치는 24kW급 1대를 가정한 참고용 추정치입니다."
+        )
 
     # ─── 8-3. 전기요금 분석 ──────────────────────────────────────────
     st.markdown('<div class="section-title">💰 전기요금 분석 (엑셀 데이터 기반)</div>', unsafe_allow_html=True)
