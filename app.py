@@ -1302,6 +1302,25 @@ if st.session_state.analyzed:
         delta=f"{round(result['saving_ratio'] * 100)}% 절감",
     )
 
+    # ─── 8-3-2. 누진제 산정 방식 안내 (슈퍼유저요금 + 증분비용 명시) ──────
+    # 누진제 선택 시에만 노출 — HP 전기요금 숫자가 어떻게 나왔는지 투명하게 설명.
+    if tariff_choice == "누진제":
+        st.markdown(f"""
+<div style='margin:8px 0 4px 0; padding:14px 18px; background:#fef7e6;
+            border-left:3px solid #d97706; border-radius:8px;'>
+  <p style='color:#854d0e; font-size:0.95rem; font-weight:700; margin:0 0 6px 0;'>
+    📌 누진제 HP 전기요금은 이렇게 계산했어요
+  </p>
+  <p style='color:#78350f; font-size:0.9rem; line-height:1.65; margin:0;'>
+    위 <b>HP 연간 전기요금</b>에는 히트펌프 전환으로 발생하는 비용이 다음과 같이 반영되어 있습니다.<br>
+    ① <b>슈퍼유저요금</b> — 동계(12·1·2월)·하계(7·8월) 월 1,000kWh 초과분은 736.2원/kWh로 가산.
+    히트펌프가 겨울 전기 사용량을 1,000kWh 이상으로 끌어올리는 경우가 그대로 반영됩니다.<br>
+    ② <b>증분비용 귀속</b> — 히트펌프가 <u>추가로 일으킨 요금</u>(= HP+가전 청구액 − 가전만 청구액)만
+    난방요금으로 잡았습니다. 즉 히트펌프 때문에 올라간 누진·슈퍼 구간 비용이 모두 히트펌프 쪽에 귀속됩니다.
+  </p>
+</div>
+""", unsafe_allow_html=True)
+
     # ─── 8-4. 환경 기여 박스 (Sheet2 행 65 기반) ─────────────────────
     # 사용자 입력 기준 — 현재 사용 중인 난방 연료 vs HP 연간 배출량만 비교.
     # (선택하지 않은 다른 연료는 표시하지 않음 — 연료 교체를 권하는 듯한 오해 방지)
