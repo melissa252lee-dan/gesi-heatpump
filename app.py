@@ -536,7 +536,7 @@ def calc_monthly_stats(monthly_ex_man, monthly_hp_man, monthly_ratios,
     }
 
 
-def calc_annual_co2_emissions(user_annual_cost_won, user_heat_demand_kwh,
+def calc_annual_co2_emissions(user_annual_cost_won, hp_electricity_kwh,
                               user_heating_share, fuel_key,
                               sheet2_params, emission_factors_fuel,
                               emission_factor_hp_2025, emission_factor_hp_2038,
@@ -545,25 +545,26 @@ def calc_annual_co2_emissions(user_annual_cost_won, user_heat_demand_kwh,
 
     엑셀 공식 (Sheet2):
       • C66/D66/E66/F66 (1년차, 연료별) = 행43/1000 × 배출계수 (행10)
-      • G66 (1년차 HP, 2026) = user_heat_demand_kwh / 1000 × I10  (단위: tCO2)
-      • G78 (13년차 HP, 2038) = user_heat_demand_kwh / 1000 × J10
+      • G66 (1년차 HP, 2026) = HP 전기량 × 그리드 배출계수(2025)
+      • G78 (13년차 HP, 2038) = HP 전기량 × 그리드 배출계수(2038)
       • G67~G77 (2~12년차): G66 + (idx-1) × (G78 - G66) / 12   ← 선형 보간
       • G79 (14년차): G78 - G78/12
       • G80 (15년차): G79 - G78/12  =  G78 - 2 × G78/12
 
-    중요: HP CO2는 **유효 열 수요(kWh)** 기반 계산 (HP가 만들어야 할 열량).
-         **HP 전력 사용량**과는 다르다 (전력 = 열 ÷ COP).
-         이전 버전은 후자를 썼기 때문에 약 1/COP(≈1/3)로 과소 추정됨.
+    중요: HP CO2는 **실제 HP 전력 사용량(kWh)** 기반으로 계산한다.
+         에너지/요금 박스와 동일한 월별 COP 기반 HP 전기량(kwh['annual_hp'])을 그대로
+         그리드 배출계수에 곱해, 두 박스가 같은 HP 전기량을 가정하도록 일치시킨다.
+         (이전: 유효 열 수요 ÷ sCOP 방식 — 월별 COP와 ~5~7% 어긋나 CO2를 과대 추정)
 
     Args:
         user_annual_cost_won:    사용자 연간 난방비
-        user_heat_demand_kwh:    유효 열 수요 (kWh) — 엑셀 C44/D44/E44/F44에 해당
+        hp_electricity_kwh:      실제 HP 전력 사용량 (kWh) — 월별 COP 기반 (= kwh['annual_hp'])
         user_heating_share:      취사기기 보정 — 도시가스/LPG 0.8475, 인덕션 1.0
         fuel_key:                현재 사용 연료
         sheet2_params:           base_fee, rate
         emission_factors_fuel:   연료별 배출계수 (Sheet2 행 10 col 5-8, kg/kWh)
-        emission_factor_hp_2025: I10 ≈ 0.131 kg/kWh
-        emission_factor_hp_2038: J10 ≈ 0.0418 kg/kWh
+        emission_factor_hp_2025: 2025년 그리드 배출계수 (raw, kg/kWh) — sCOP로 나누지 않음
+        emission_factor_hp_2038: 2038년 그리드 배출계수 (raw, 청정화 반영)
         year_idx:                0=2026, 1~14=2027~2040
 
     참고: 엑셀 패턴에는 태양광 자가발전 차감이 없음 (그리드 청정화는 매년 자연 감소).
@@ -584,9 +585,9 @@ def calc_annual_co2_emissions(user_annual_cost_won, user_heat_demand_kwh,
         fuel_kwh = max(0, fuel_kwh)
         by_fuel[fuel] = fuel_kwh * emission_factors_fuel.get(fuel, 0)  # kg
 
-    # HP CO2 — 엑셀 G66~G80 패턴 (단위: kg)
-    co2_y1  = user_heat_demand_kwh * emission_factor_hp_2025   # G66 (× 1000)
-    co2_y13 = user_heat_demand_kwh * emission_factor_hp_2038   # G78 (× 1000)
+    # HP CO2 — 실제 HP 전기량 × 그리드 배출계수 (G66~G80 보간 패턴, 단위: kg)
+    co2_y1  = hp_electricity_kwh * emission_factor_hp_2025   # 2026년 그리드
+    co2_y13 = hp_electricity_kwh * emission_factor_hp_2038   # 2038년 그리드 (청정화)
 
     if year_idx <= 12:        # G66~G78 (1~13년차 = 2026~2038) 선형 보간
         hp_kg = co2_y1 + year_idx * (co2_y13 - co2_y1) / 12
@@ -1228,22 +1229,18 @@ if st.session_state.analyzed:
     hdd_zone = HDD_MONTHLY[zone]            # 비고 표시용 (난방월/비난방월 판단)
     jan_ratio = monthly_ratios[0] if monthly_ratios[0] > 0 else 1
     monthly_ex_man = [round(winter_heat_man * monthly_ratios[m-1] / jan_ratio, 2) for m in months]
-    # 연간 CO₂ 배출량 — 엑셀 G66~G80 패턴 (유효 열 수요 × HP 배출계수)
-    # ⚠️ HP 배출계수는 사용자 기후존의 sCOP에 따라 동적 계산 (엑셀 I10/J10 공식)
-    user_scop = SCOP_BY_ZONE[zone]
-    ef_hp_2025 = GRID_EF_2025_KGKWH / user_scop   # 엑셀 I10 = 0.4173 / sCOP[zone]
-    ef_hp_2038 = GRID_EF_2038_KGKWH / user_scop   # 엑셀 J10 = (83.1/624.5) / sCOP[zone]
-
+    # 연간 CO₂ 배출량 — 실제 HP 전기량(kwh['annual_hp'], 월별 COP 기반) × 그리드 배출계수
+    # CO₂ 박스 ↔ 에너지 박스가 같은 HP 전기량을 쓰도록 일치 (sCOP로 나누던 방식 제거)
     solar_annual_kwh = sum(monthly_solar) if monthly_solar else 0
     co2 = calc_annual_co2_emissions(
         user_annual_cost_won=user_annual_cost_won,
-        user_heat_demand_kwh=user_heat_demand_kwh,
+        hp_electricity_kwh=kwh["annual_hp"],
         user_heating_share=user_heating_share,
         fuel_key=fuel_key,
         sheet2_params=SHEET2_PARAMS,
         emission_factors_fuel=EMISSION_FACTORS_FUEL,
-        emission_factor_hp_2025=ef_hp_2025,
-        emission_factor_hp_2038=ef_hp_2038,
+        emission_factor_hp_2025=GRID_EF_2025_KGKWH,
+        emission_factor_hp_2038=GRID_EF_2038_KGKWH,
         year_idx=0,
     )
 
@@ -1599,19 +1596,18 @@ if st.session_state.analyzed:
     st.markdown('<div class="section-title">🌍 환경 효과 (그리드 청정화 반영)</div>',
                 unsafe_allow_html=True)
 
-    # 15년치 배출량 — 엑셀 G66~G80 패턴 (year_idx로 보간 분기)
-    # HP 배출계수는 위에서 계산한 동적값 (ef_hp_2025/2038) 그대로 사용
+    # 15년치 배출량 — 실제 HP 전기량 × 그리드 배출계수 (year_idx로 2026~2040 보간)
     years_15 = list(range(1, 16))
     co2_15yr_dyn = [
         calc_annual_co2_emissions(
             user_annual_cost_won=user_annual_cost_won,
-            user_heat_demand_kwh=user_heat_demand_kwh,
+            hp_electricity_kwh=kwh["annual_hp"],
             user_heating_share=user_heating_share,
             fuel_key=fuel_key,
             sheet2_params=SHEET2_PARAMS,
             emission_factors_fuel=EMISSION_FACTORS_FUEL,
-            emission_factor_hp_2025=ef_hp_2025,
-            emission_factor_hp_2038=ef_hp_2038,
+            emission_factor_hp_2025=GRID_EF_2025_KGKWH,
+            emission_factor_hp_2038=GRID_EF_2038_KGKWH,
             year_idx=y,
         ) for y in range(15)
     ]
