@@ -6,10 +6,10 @@
 
 데이터 출처: 전기요금완료본.xlsx (요금제 × 태양광 × 난방유형 20개 블록)
 
-[2026-06 수정] 누진제 HP 전기요금에 ① 슈퍼유저요금(동·하계 1,000kWh 초과분
-736.2원/kWh)과 ② 증분비용 방식(HP가 일으킨 한계 비용만 HP에 귀속)을 반영.
-앱 결과는 본 Python 코드에서 산출되므로(엑셀 블록은 결과 미사용), 두 효과 모두
-여기 코드에 구현되어야 실제 HP 비용에 반영됨 — 이중계산 위험 없음.
+[2026-06] 누진제·일반용·계시별 모두 엑셀 전기요금 시트의 산식을 그대로 복제.
+누진제 HP 몫은 비율분배(전체 청구액 × HP 사용량 비중)로 산정하며, 슈퍼유저요금은
+적용하지 않는다(엑셀과 동일). 계약전력은 Sheet2!C4(평수→열용량) ÷ 3으로 산정.
+동일 입력 시 앱 결과는 엑셀과 일치한다.
 """
 import os
 import pandas as pd
@@ -237,16 +237,6 @@ INNER_GYEONGNAM = {"거창군", "함양군"}  # 경남 내륙 → 중부2 (다�
 
 # ── 보조금 (만원) ── 난방 전기화 사업: 설치비 1,000만원의 70% 지원
 SUBSIDY_TOTAL = 700
-
-# ── 슈퍼유저요금 상수 (엑셀 전기요금!B11·B20 명세) ──
-# 동계(12·1·2월)·하계(7·8월) 월 1,000kWh 초과분에 736.2원/kWh 적용.
-# ⚠️ 앱 결과는 엑셀 블록이 아니라 이 Python 청구 함수에서 산출되므로,
-#    슈퍼유저요금이 HP 비용에 실제로 반영되려면 반드시 여기 코드에 있어야 한다.
-#    (엑셀 블록은 결과 계산에 쓰이지 않으므로 이중계산 위험 없음)
-SUPER_USER_THRESHOLD_KWH = 1000     # 초과 기준 사용량
-SUPER_USER_RATE          = 736.2    # 초과분 단가 (원/kWh)
-SUPER_USER_MONTHS        = (12, 1, 2, 7, 8)  # 동계 12·1·2 / 하계 7·8
-
 
 # ══════════════════════════════════════════════════════════════════════
 # 3. 데이터 로더
@@ -482,11 +472,9 @@ def get_hp_specs(h_size_pyung):
         return ("냉장고 크기",       "700 × 1,800 mm",   "8 kW")
     if h_size_pyung <= 25:
         return ("워시타워 1대 크기", "800 × 1,115 mm",   "12 kW")
-    if h_size_pyung <= 35:
-        return ("보일러실 크기",     "1,120 × 1,666 mm", "16 kW")
     if h_size_pyung <= 40:
-        return ("대형 보일러실 크기", "1,380 × 1,700 mm", "20 kW")
-    return     ("상담 필요",         "—",                "상담 필요")
+        return ("보일러실 크기",     "1,120 × 1,666 mm", "16 kW")
+    return     ("대형 보일러실 크기", "1,380 × 1,700 mm", "20 kW")
 
 
 def get_hp_capacity_kw(h_size_pyung):
@@ -498,9 +486,8 @@ def get_hp_capacity_kw(h_size_pyung):
     """
     if h_size_pyung <= 14:   return 8
     if h_size_pyung <= 25:   return 12
-    if h_size_pyung <= 35:   return 16
-    if h_size_pyung <= 40:   return 20
-    return 24
+    if h_size_pyung <= 40:   return 16
+    return 20
 
 
 def calc_monthly_stats(monthly_ex_man, monthly_hp_man, monthly_ratios,
@@ -536,7 +523,7 @@ def calc_monthly_stats(monthly_ex_man, monthly_hp_man, monthly_ratios,
     }
 
 
-def calc_annual_co2_emissions(user_annual_cost_won, hp_electricity_kwh,
+def calc_annual_co2_emissions(user_annual_cost_won, user_heat_demand_kwh,
                               user_heating_share, fuel_key,
                               sheet2_params, emission_factors_fuel,
                               emission_factor_hp_2025, emission_factor_hp_2038,
@@ -545,26 +532,25 @@ def calc_annual_co2_emissions(user_annual_cost_won, hp_electricity_kwh,
 
     엑셀 공식 (Sheet2):
       • C66/D66/E66/F66 (1년차, 연료별) = 행43/1000 × 배출계수 (행10)
-      • G66 (1년차 HP, 2026) = HP 전기량 × 그리드 배출계수(2025)
-      • G78 (13년차 HP, 2038) = HP 전기량 × 그리드 배출계수(2038)
+      • G66 (1년차 HP, 2026) = user_heat_demand_kwh / 1000 × I10  (단위: tCO2)
+      • G78 (13년차 HP, 2038) = user_heat_demand_kwh / 1000 × J10
       • G67~G77 (2~12년차): G66 + (idx-1) × (G78 - G66) / 12   ← 선형 보간
       • G79 (14년차): G78 - G78/12
       • G80 (15년차): G79 - G78/12  =  G78 - 2 × G78/12
 
-    중요: HP CO2는 **실제 HP 전력 사용량(kWh)** 기반으로 계산한다.
-         에너지/요금 박스와 동일한 월별 COP 기반 HP 전기량(kwh['annual_hp'])을 그대로
-         그리드 배출계수에 곱해, 두 박스가 같은 HP 전기량을 가정하도록 일치시킨다.
-         (이전: 유효 열 수요 ÷ sCOP 방식 — 월별 COP와 ~5~7% 어긋나 CO2를 과대 추정)
+    중요: HP CO2는 **유효 열 수요(kWh)** 기반 계산 (HP가 만들어야 할 열량).
+         **HP 전력 사용량**과는 다르다 (전력 = 열 ÷ COP).
+         이전 버전은 후자를 썼기 때문에 약 1/COP(≈1/3)로 과소 추정됨.
 
     Args:
         user_annual_cost_won:    사용자 연간 난방비
-        hp_electricity_kwh:      실제 HP 전력 사용량 (kWh) — 월별 COP 기반 (= kwh['annual_hp'])
+        user_heat_demand_kwh:    유효 열 수요 (kWh) — 엑셀 C44/D44/E44/F44에 해당
         user_heating_share:      취사기기 보정 — 도시가스/LPG 0.8475, 인덕션 1.0
         fuel_key:                현재 사용 연료
         sheet2_params:           base_fee, rate
         emission_factors_fuel:   연료별 배출계수 (Sheet2 행 10 col 5-8, kg/kWh)
-        emission_factor_hp_2025: 2025년 그리드 배출계수 (raw, kg/kWh) — sCOP로 나누지 않음
-        emission_factor_hp_2038: 2038년 그리드 배출계수 (raw, 청정화 반영)
+        emission_factor_hp_2025: I10 ≈ 0.131 kg/kWh
+        emission_factor_hp_2038: J10 ≈ 0.0418 kg/kWh
         year_idx:                0=2026, 1~14=2027~2040
 
     참고: 엑셀 패턴에는 태양광 자가발전 차감이 없음 (그리드 청정화는 매년 자연 감소).
@@ -585,9 +571,9 @@ def calc_annual_co2_emissions(user_annual_cost_won, hp_electricity_kwh,
         fuel_kwh = max(0, fuel_kwh)
         by_fuel[fuel] = fuel_kwh * emission_factors_fuel.get(fuel, 0)  # kg
 
-    # HP CO2 — 실제 HP 전기량 × 그리드 배출계수 (G66~G80 보간 패턴, 단위: kg)
-    co2_y1  = hp_electricity_kwh * emission_factor_hp_2025   # 2026년 그리드
-    co2_y13 = hp_electricity_kwh * emission_factor_hp_2038   # 2038년 그리드 (청정화)
+    # HP CO2 — 엑셀 G66~G80 패턴 (단위: kg)
+    co2_y1  = user_heat_demand_kwh * emission_factor_hp_2025   # G66 (× 1000)
+    co2_y13 = user_heat_demand_kwh * emission_factor_hp_2038   # G78 (× 1000)
 
     if year_idx <= 12:        # G66~G78 (1~13년차 = 2026~2038) 선형 보간
         hp_kg = co2_y1 + year_idx * (co2_y13 - co2_y1) / 12
@@ -679,11 +665,7 @@ def calc_progressive_billing(usage_kwh, month, solar_offset=0):
     """누진제 적용 월별 청구액 계산 (전기요금 시트 J~Q열 수식 그대로 복제).
 
     수식 출처: 전기요금!J6:Q6 (1월 누진제 태X 기준).
-
-    슈퍼유저요금 반영 (엑셀 전기요금!B11·B20 명세):
-      동계(12·1·2월)·하계(7·8월)에 한해 월 1,000kWh 초과분은 736.2원/kWh 적용.
-      히트펌프 난방으로 겨울 사용량이 1,000kWh를 넘는 경우를 정확히 반영한다.
-      (앱 결과는 이 함수에서 산출되므로 슈퍼유저요금은 여기서 가산해야 한다.)
+    엑셀 산식 그대로 — 슈퍼유저요금 미적용.
 
     Args:
         usage_kwh:    월별 총 사용량 (HP + 가전)
@@ -708,20 +690,13 @@ def calc_progressive_billing(usage_kwh, month, solar_offset=0):
     elif actual <= step2_max:  base_fee = 1600
     else:                       base_fee = 7300
 
-    # 슈퍼유저요금 발동 여부 — 동·하계 & 1,000kWh 초과
-    super_on = month in SUPER_USER_MONTHS and actual > SUPER_USER_THRESHOLD_KWH
-
-    # 사용량요금 (단계별 누진)
+    # 사용량요금 (단계별 누진) — 엑셀 산식 그대로 (슈퍼유저요금 미적용)
     if actual <= step1_max:
         usage_fee = int(actual * 120)
     elif actual <= step2_max:
         usage_fee = int(step1_acc + (actual - step1_max) * 214.6)
-    elif not super_on:
-        usage_fee = int(step2_acc + (actual - step2_max) * 307.3)
     else:
-        # 1,000kWh까지는 최고누진(307.3원) 누적, 초과분만 736.2원/kWh
-        acc_1000  = step2_acc + (SUPER_USER_THRESHOLD_KWH - step2_max) * 307.3
-        usage_fee = int(acc_1000 + (actual - SUPER_USER_THRESHOLD_KWH) * SUPER_USER_RATE)
+        usage_fee = int(step2_acc + (actual - step2_max) * 307.3)
 
     climate_fee = int(actual * 9)        # 기후환경요금
     fuel_adj    = int(actual * 5)        # 연료비조정요금
@@ -730,37 +705,6 @@ def calc_progressive_billing(usage_kwh, month, solar_offset=0):
     fund        = (int(total_fee * 0.027) // 10) * 10             # 기금 2.7% (10원 절사)
     billing     = ((total_fee + vat + fund) // 10) * 10            # 청구합계 (10원 절사)
     return billing
-
-
-def calc_hp_billing_progressive(monthly_hp_kwh, monthly_appliance_kwh, monthly_solar_kwh=None):
-    """누진제 케이스에서 HP 분리 청구액 12개월 계산 — 증분비용 방식.
-
-    [2026-06 변경] 기존 사용량 비율 분배(Q × HP/(HP+가전))에서
-    증분비용 방식으로 교체:
-        HP 청구액 = 청구액(HP+가전) − 청구액(가전만)
-    가전만으로는 1,000kWh를 넘지 않으므로, HP가 밀어올린 고누진·슈퍼유저
-    구간 비용이 온전히 HP에 귀속된다. (비율분배는 이 비싼 구간을 희석해 과소계상)
-
-    Args:
-        monthly_hp_kwh:        12개월 HP 전력 사용량
-        monthly_appliance_kwh: 12개월 가전 평균 사용량
-        monthly_solar_kwh:     12개월 태양광 발전량 (있으면 차감, 누진제 태O)
-
-    Returns: 12개월 HP 청구액 (원) 리스트
-    """
-    hp_won_monthly = []
-    for m in range(12):
-        hp_kwh = monthly_hp_kwh[m]
-        gadget_kwh = monthly_appliance_kwh[m]
-        solar = monthly_solar_kwh[m] if monthly_solar_kwh else 0
-
-        # 증분 = (HP+가전) 청구액 − (가전만) 청구액
-        bill_with = calc_progressive_billing(hp_kwh + gadget_kwh, m+1, solar_offset=solar)
-        bill_base = calc_progressive_billing(gadget_kwh,          m+1, solar_offset=solar)
-        hp_won_monthly.append(max(0, bill_with - bill_base))
-
-    return hp_won_monthly
-
 
 # ─── 일반용 (HP 전용 미터) 단가 ───
 GENERAL_RATE_BY_MONTH = {1:119, 2:119, 11:119, 12:119,        # 겨울
@@ -845,9 +789,7 @@ def calc_dynamic_result(tariff_label, monthly_hp_kwh, monthly_appliance_kwh,
     엑셀 전기요금 시트의 R/S/T/U 수식을 Python으로 복제.
     HP 월별 kWh + 가전 + 태양광을 받아 요금제별 월별 청구액 산정.
 
-    [2026-06 변경] 누진제 HP 분리를 증분비용 방식으로 교체:
-        HP 청구액 = 청구액(HP+가전) − 청구액(가전만)
-    슈퍼유저 구간(calc_progressive_billing 내부 반영)이 HP에 온전히 귀속된다.
+    [2026-06] 누진제 HP 분리는 비율분배(엑셀 R열) — 전체 청구액 × HP 사용량 비중.
 
     Args:
         tariff_label:           "누진제 (태양광 미설치)" 등 5개 라벨
@@ -873,11 +815,9 @@ def calc_dynamic_result(tariff_label, monthly_hp_kwh, monthly_appliance_kwh,
         total = hp + gad
 
         if tariff_kind == "누진제":
-            # 증분비용 방식: HP가 일으킨 한계 청구액만 귀속
-            # = 청구액(HP+가전) − 청구액(가전만). 슈퍼유저 구간이 HP에 온전히 반영됨.
-            bill_with = calc_progressive_billing(total, m+1, solar_offset=solar)
-            bill_base = calc_progressive_billing(gad,   m+1, solar_offset=solar)
-            hp_won = max(0, bill_with - bill_base)
+            # 비율분배(엑셀 R열 방식): 전체 청구액 × HP 사용량 비중
+            billing = calc_progressive_billing(total, m+1, solar_offset=solar)
+            hp_won = round(billing * hp / total) if total > 0 else 0
 
         elif tariff_kind == "일반용":
             # HP 전용 미터 — 가전·태양광 무관
@@ -1124,8 +1064,8 @@ with col_opt:
         st.caption("ℹ️ 일반용은 HP 전용 별도 미터라서 태양광 발전 영향이 없습니다.")
     if tariff_choice_simple == "누진제":
         st.caption(
-            "ℹ️ 누진제는 동·하계 월 1,000kWh 초과분에 슈퍼유저요금(736.2원/kWh)이 적용되며, "
-            "HP가 일으킨 증분 비용만 난방요금으로 귀속해 계산합니다."
+            "ℹ️ 누진제는 주택용 저압 누진 요금입니다. 전체 전기요금을 HP 사용량 비중만큼 "
+            "난방요금으로 배분해 계산합니다 (엑셀과 동일)."
         )
 
 # ── tariff_label 재구성 (기존 TARIFF_LABEL_MAP 5개 키와 호환) ──
@@ -1229,18 +1169,22 @@ if st.session_state.analyzed:
     hdd_zone = HDD_MONTHLY[zone]            # 비고 표시용 (난방월/비난방월 판단)
     jan_ratio = monthly_ratios[0] if monthly_ratios[0] > 0 else 1
     monthly_ex_man = [round(winter_heat_man * monthly_ratios[m-1] / jan_ratio, 2) for m in months]
-    # 연간 CO₂ 배출량 — 실제 HP 전기량(kwh['annual_hp'], 월별 COP 기반) × 그리드 배출계수
-    # CO₂ 박스 ↔ 에너지 박스가 같은 HP 전기량을 쓰도록 일치 (sCOP로 나누던 방식 제거)
+    # 연간 CO₂ 배출량 — 엑셀 G66~G80 패턴 (유효 열 수요 × HP 배출계수)
+    # ⚠️ HP 배출계수는 사용자 기후존의 sCOP에 따라 동적 계산 (엑셀 I10/J10 공식)
+    user_scop = SCOP_BY_ZONE[zone]
+    ef_hp_2025 = GRID_EF_2025_KGKWH / user_scop   # 엑셀 I10 = 0.4173 / sCOP[zone]
+    ef_hp_2038 = GRID_EF_2038_KGKWH / user_scop   # 엑셀 J10 = (83.1/624.5) / sCOP[zone]
+
     solar_annual_kwh = sum(monthly_solar) if monthly_solar else 0
     co2 = calc_annual_co2_emissions(
         user_annual_cost_won=user_annual_cost_won,
-        hp_electricity_kwh=kwh["annual_hp"],
+        user_heat_demand_kwh=user_heat_demand_kwh,
         user_heating_share=user_heating_share,
         fuel_key=fuel_key,
         sheet2_params=SHEET2_PARAMS,
         emission_factors_fuel=EMISSION_FACTORS_FUEL,
-        emission_factor_hp_2025=GRID_EF_2025_KGKWH,
-        emission_factor_hp_2038=GRID_EF_2038_KGKWH,
+        emission_factor_hp_2025=ef_hp_2025,
+        emission_factor_hp_2038=ef_hp_2038,
         year_idx=0,
     )
 
@@ -1282,7 +1226,7 @@ if st.session_state.analyzed:
         st.info(
             "ℹ️ 전용면적 40평 초과 주택은 단일 히트펌프로 충분하지 않을 수 있어, "
             "여러 대 설치 또는 맞춤 설계를 위한 **전문가 상담**을 권장합니다. "
-            "아래 경제성 수치는 24kW급 1대를 가정한 참고용 추정치입니다."
+            "아래 경제성 수치는 20kW급 1대를 가정한 참고용 추정치입니다."
         )
 
     # ─── 8-3. 전기요금 분석 ──────────────────────────────────────────
@@ -1304,8 +1248,7 @@ if st.session_state.analyzed:
         delta=f"{round(result['saving_ratio'] * 100)}% 절감",
     )
 
-    # ─── 8-3-2. 누진제 산정 방식 안내 (슈퍼유저요금 + 증분비용 명시) ──────
-    # 누진제 선택 시에만 노출 — HP 전기요금 숫자가 어떻게 나왔는지 투명하게 설명.
+    # ─── 8-3-2. 누진제 산정 방식 안내 (비율분배) ──────
     if tariff_choice == "누진제":
         st.markdown(f"""
 <div style='margin:8px 0 4px 0; padding:14px 18px; background:#fef7e6;
@@ -1314,11 +1257,8 @@ if st.session_state.analyzed:
     📌 누진제 HP 전기요금은 이렇게 계산했어요
   </p>
   <p style='color:#78350f; font-size:0.9rem; line-height:1.65; margin:0;'>
-    위 <b>HP 연간 전기요금</b>에는 히트펌프 전환으로 발생하는 비용이 다음과 같이 반영되어 있습니다.<br>
-    ① <b>슈퍼유저요금</b> — 동계(12·1·2월)·하계(7·8월) 월 1,000kWh 초과분은 736.2원/kWh로 가산.
-    히트펌프가 겨울 전기 사용량을 1,000kWh 이상으로 끌어올리는 경우가 그대로 반영됩니다.<br>
-    ② <b>증분비용 귀속</b> — 히트펌프가 <u>추가로 일으킨 요금</u>(= HP+가전 청구액 − 가전만 청구액)만
-    난방요금으로 잡았습니다. 즉 히트펌프 때문에 올라간 누진·슈퍼 구간 비용이 모두 히트펌프 쪽에 귀속됩니다.
+    전체 전기요금(HP+가전)을 누진제로 계산한 뒤, <b>HP 사용량 비중만큼</b>을 HP 난방요금으로
+    배분했습니다 (엑셀 전기요금 시트와 동일한 비율분배 방식).
   </p>
 </div>
 """, unsafe_allow_html=True)
@@ -1443,9 +1383,7 @@ if st.session_state.analyzed:
             "(가전·취사 사용분은 제외 — 기존 난방비와 동일 기준 비교)."
         )
         st.caption(
-            "🔌 **누진제 산정 방식**: HP가 일으킨 *증분 비용*(= HP+가전 청구액 − 가전만 청구액)으로 계산합니다. "
-            "동·하계 월 1,000kWh 초과분에는 슈퍼유저요금(736.2원/kWh)이 반영되어, "
-            "히트펌프가 밀어올린 고누진 구간이 난방요금에 정확히 잡힙니다."
+            "🔌 **누진제 산정 방식**: 전체 전기요금(HP+가전)을 HP 사용량 비중으로 나눠 HP 몫을 산정합니다 (엑셀 비율분배 방식)."
         )
         st.caption(
             f"📅 **월별 분배 기준**: 입력하신 광역시도({region})의 평균 월별 난방 비중을 사용자의 1월 입력값에 비례하여 분배한 추정치입니다. "
@@ -1596,18 +1534,19 @@ if st.session_state.analyzed:
     st.markdown('<div class="section-title">🌍 환경 효과 (그리드 청정화 반영)</div>',
                 unsafe_allow_html=True)
 
-    # 15년치 배출량 — 실제 HP 전기량 × 그리드 배출계수 (year_idx로 2026~2040 보간)
+    # 15년치 배출량 — 엑셀 G66~G80 패턴 (year_idx로 보간 분기)
+    # HP 배출계수는 위에서 계산한 동적값 (ef_hp_2025/2038) 그대로 사용
     years_15 = list(range(1, 16))
     co2_15yr_dyn = [
         calc_annual_co2_emissions(
             user_annual_cost_won=user_annual_cost_won,
-            hp_electricity_kwh=kwh["annual_hp"],
+            user_heat_demand_kwh=user_heat_demand_kwh,
             user_heating_share=user_heating_share,
             fuel_key=fuel_key,
             sheet2_params=SHEET2_PARAMS,
             emission_factors_fuel=EMISSION_FACTORS_FUEL,
-            emission_factor_hp_2025=GRID_EF_2025_KGKWH,
-            emission_factor_hp_2038=GRID_EF_2038_KGKWH,
+            emission_factor_hp_2025=ef_hp_2025,
+            emission_factor_hp_2038=ef_hp_2038,
             year_idx=y,
         ) for y in range(15)
     ]
