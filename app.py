@@ -875,8 +875,11 @@ def calc_dynamic_result(tariff_label, monthly_hp_kwh, monthly_appliance_kwh,
             hp_won = calc_general_billing(hp, m+1, contract_kw)
 
         elif tariff_kind == "계시별":
-            billing = calc_tou_billing(hp, gad, m+1, contract_kw, solar_kwh=solar)
-            hp_won = round(billing * hp / total) if total > 0 else 0
+            # 증분비용(엑셀 R열 = MAX(Q−BD6,0)): HP가 일으킨 한계 청구액만 귀속.
+            # 계약 기본료는 가전(기준선)에 온전히 잡혀 상쇄 → HP는 시간대별 사용요금만 부담.
+            bill_with = calc_tou_billing(hp, gad, m+1, contract_kw, solar_kwh=solar)
+            bill_base = calc_tou_billing(0,  gad, m+1, contract_kw, solar_kwh=solar)
+            hp_won = max(0, bill_with - bill_base)
         else:
             hp_won = 0
 
