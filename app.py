@@ -227,6 +227,42 @@ REGION_NAME_MAP = {
     "제주도":   "제주특별자치도",
 }
 
+# 행정구역 개편(강원→강원특별자치도, 전북→전북특별자치도 등)으로 엑셀 Sheet3·태양광
+# 표의 지역명이 옛/새 둘 다 가능 → 어느 쪽 엑셀이든 매칭되도록 별칭을 둔다.
+REGION_NAME_ALIASES = {
+    "강원도":   ["강원도", "강원특별자치도"],
+    "전라북도": ["전라북도", "전북특별자치도"],
+    "제주도":   ["제주도", "제주특별자치도"],
+    "세종":     ["세종특별자치시", "세종"],
+}
+
+
+def _region_candidates(region):
+    """엑셀 지역명이 옛 이름이든 새 이름이든 찾도록 후보 목록 생성."""
+    cands = list(REGION_NAME_ALIASES.get(region, []))
+    mapped = REGION_NAME_MAP.get(region)
+    if mapped and mapped not in cands:
+        cands.append(mapped)
+    if region not in cands:
+        cands.append(region)
+    return cands
+
+
+def lookup_region_ratios(region):
+    """월별 난방 비중 — 옛/새 지역명 모두 시도, 못 찾으면 전국 평균."""
+    for nm in _region_candidates(region):
+        if nm in REGION_RATIOS:
+            return REGION_RATIOS[nm], nm
+    return REGION_RATIOS.get("전국"), "전국"
+
+
+def lookup_region_solar(region):
+    """광역시도 태양광 발전량 — 옛/새 지역명 모두 시도, 없으면 None."""
+    for nm in _region_candidates(region):
+        if nm in SOLAR_KWH:
+            return SOLAR_KWH[nm]
+    return None
+
 # ── 기초지자체별 zone 오버라이드 (Sheet2 B49 수식 로직) ──
 # 광역 시도만으로는 정확하지 않은 지역 — 기초지자체까지 봐야 함
 COASTAL_GANGWON   = {"고성군", "속초시", "양양군", "강릉시", "동해시", "삼척시"}  # 강원 해안 → 중부2
@@ -1119,9 +1155,8 @@ if st.session_state.analyzed:
     block_key, tariff_choice, solar_flag = get_block_key(tariff_label, heating_type)
     fuel_key = HEATING_TYPE_MAP[heating_type]   # 이후 모든 곳에서 재사용
 
-    # 광역시도별 월별 난방 비중 가져오기 (Sheet3) — 매핑 실패 시 전국 평균 사용
-    sheet3_region_name = REGION_NAME_MAP.get(region, "전국")
-    monthly_ratios = REGION_RATIOS.get(sheet3_region_name, REGION_RATIOS.get("전국"))
+    # 광역시도별 월별 난방 비중 (Sheet3) — 옛/새 지역명 모두 매칭, 실패 시 전국 평균
+    monthly_ratios, sheet3_region_name = lookup_region_ratios(region)
 
     # 에너지 사용량 (kWh) — Sheet2 2단계 모델
     # 사용자 연간 난방비 = 1월 입력 ÷ 1월 비중 (지역별)
@@ -1142,7 +1177,7 @@ if st.session_state.analyzed:
     # 5개 요금제(누진제 태X/태O, 일반용, 계시별 태X/태O) 청구액 모두 직접 계산.
     # 태양광 설치 시: 사용자 광역시도의 1kW당 발전량 × 설치 용량(kW)
     if solar_flag == "태O" and solar_capa_kw > 0:
-        region_solar = SOLAR_KWH.get(REGION_NAME_MAP.get(region, ""), None)
+        region_solar = lookup_region_solar(region)
         monthly_solar = [s * solar_capa_kw for s in region_solar] if region_solar else None
     else:
         monthly_solar = None
