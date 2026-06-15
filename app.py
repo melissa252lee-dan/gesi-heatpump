@@ -820,6 +820,14 @@ def calc_tou_billing(hp_kwh, gadget_kwh, month, contract_kw, solar_kwh=0):
     )
     usage_fee = int(usage_fee)   # ROUNDDOWN
 
+    # 슈퍼유저요금 — winter_summer 계절(1·2·6·7·8·11·12월)만 적용 (spring 3·4·5·9·10월 제외).
+    # 엑셀 K162/K214 슈퍼항 복제: 월 1000kWh 초과분을 736.2원/kWh로 재산정(평균단가와의 차액 가산).
+    if season == "winter_summer":
+        super_total = max(hp_kwh + gadget_kwh - solar_kwh, 0)
+        if super_total > 0:
+            avg_rate = usage_fee / super_total
+            usage_fee += int(max(super_total - SUPER_USER_THRESHOLD_KWH, 0) * (SUPER_USER_RATE - avg_rate))
+
     total_after_solar = max(hp_kwh + gadget_kwh - solar_kwh, 0)
     climate_fee = int(total_after_solar * 9)
     fuel_adj    = int(total_after_solar * 5)
@@ -875,10 +883,12 @@ def calc_dynamic_result(tariff_label, monthly_hp_kwh, monthly_appliance_kwh,
             hp_won = calc_general_billing(hp, m+1, contract_kw)
 
         elif tariff_kind == "계시별":
-            # 증분비용(엑셀 R열 = MAX(Q−BD6,0)): HP가 일으킨 한계 청구액만 귀속.
-            # 계약 기본료는 가전(기준선)에 온전히 잡혀 상쇄 → HP는 시간대별 사용요금만 부담.
+            # 증분비용(엑셀 R열 = MAX(Q−BD6,0)). 기준선(BD)은 가전만 + 가전계약(3kW)으로 산정.
+            # 따라서 HP 계약기본료(=계약kW×기본단가)는 상쇄되지 않고 HP에 귀속된다.
+            #   bill_with: 계약 = HP계약 + 가전3kW (전기요금!J = $C$170*($D$109+3))
+            #   bill_base: 계약 = 가전3kW만        (전기요금!BD6 = $C$170*3)
             bill_with = calc_tou_billing(hp, gad, m+1, contract_kw, solar_kwh=solar)
-            bill_base = calc_tou_billing(0,  gad, m+1, contract_kw, solar_kwh=solar)
+            bill_base = calc_tou_billing(0,  gad, m+1, 0,           solar_kwh=solar)
             hp_won = max(0, bill_with - bill_base)
         else:
             hp_won = 0
@@ -1125,7 +1135,7 @@ with col_opt:
 
 # ── tariff_label 재구성 (기존 TARIFF_LABEL_MAP 5개 키와 호환) ──
 # 일반용은 태양광과 무관 — 사용자가 태양광=예 선택해도 미설치로 처리
-_apply_solar = (tariff_choice_simple != "일반용") and (solar_install == "예")
+_apply_solar = (tariff_choice_simple != "일반용") and (solar_install == "예") and (solar_capa_kw > 0)
 if tariff_choice_simple == "일반용":
     tariff_label = "일반용 (HP 전용 미터)"
 elif _apply_solar:
