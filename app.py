@@ -6,10 +6,10 @@
 
 데이터 출처: 전기요금완료본.xlsx (요금제 × 태양광 × 난방유형 20개 블록)
 
-[2026-06] 누진제·일반용·계시별 모두 엑셀 전기요금 시트의 산식을 그대로 복제.
-누진제 HP 몫은 비율분배(전체 청구액 × HP 사용량 비중)로 산정하며, 슈퍼유저요금은
-적용하지 않는다(엑셀과 동일). 계약전력은 Sheet2!C4(평수→열용량) ÷ 3으로 산정.
-동일 입력 시 앱 결과는 엑셀과 일치한다.
+[2026-06] 엑셀 설계자 기준에 따라, 누진제 HP 전기요금은 증분비용 방식으로 산정한다.
+즉 히트펌프가 추가로 일으킨 요금(= HP+가전 청구액 − 가전만 청구액)만 난방요금에
+귀속하며, 이때 히트펌프가 끌어올린 누진 상위구간과 슈퍼유저요금(동·하계 월 1,000kWh
+초과분 736.2원/kWh)이 모두 히트펌프 쪽에 잡힌다. 계약전력은 Sheet2!C4 ÷ 3으로 산정.
 """
 import os
 import pandas as pd
@@ -690,13 +690,20 @@ def calc_progressive_billing(usage_kwh, month, solar_offset=0):
     elif actual <= step2_max:  base_fee = 1600
     else:                       base_fee = 7300
 
-    # 사용량요금 (단계별 누진) — 엑셀 산식 그대로 (슈퍼유저요금 미적용)
+    # 슈퍼유저요금 발동 — 동·하계 & 1,000kWh 초과 (초과분 736.2원/kWh)
+    super_on = month in SUPER_USER_MONTHS and actual > SUPER_USER_THRESHOLD_KWH
+
+    # 사용량요금 (단계별 누진)
     if actual <= step1_max:
         usage_fee = int(actual * 120)
     elif actual <= step2_max:
         usage_fee = int(step1_acc + (actual - step1_max) * 214.6)
-    else:
+    elif not super_on:
         usage_fee = int(step2_acc + (actual - step2_max) * 307.3)
+    else:
+        # 1,000kWh까지는 최고누진(307.3원) 누적, 초과분만 736.2원/kWh
+        acc_1000  = step2_acc + (SUPER_USER_THRESHOLD_KWH - step2_max) * 307.3
+        usage_fee = int(acc_1000 + (actual - SUPER_USER_THRESHOLD_KWH) * SUPER_USER_RATE)
 
     climate_fee = int(actual * 9)        # 기후환경요금
     fuel_adj    = int(actual * 5)        # 연료비조정요금
@@ -705,6 +712,12 @@ def calc_progressive_billing(usage_kwh, month, solar_offset=0):
     fund        = (int(total_fee * 0.027) // 10) * 10             # 기금 2.7% (10원 절사)
     billing     = ((total_fee + vat + fund) // 10) * 10            # 청구합계 (10원 절사)
     return billing
+
+# ── 슈퍼유저요금 상수 (엑셀 전기요금!B11·B20 명세) ──
+# 동계(12·1·2월)·하계(7·8월) 월 1,000kWh 초과분에 736.2원/kWh 적용.
+SUPER_USER_THRESHOLD_KWH = 1000     # 초과 기준 사용량
+SUPER_USER_RATE          = 736.2    # 초과분 단가 (원/kWh)
+SUPER_USER_MONTHS        = (12, 1, 2, 7, 8)  # 동계 12·1·2 / 하계 7·8
 
 # ─── 일반용 (HP 전용 미터) 단가 ───
 GENERAL_RATE_BY_MONTH = {1:119, 2:119, 11:119, 12:119,        # 겨울
@@ -815,9 +828,11 @@ def calc_dynamic_result(tariff_label, monthly_hp_kwh, monthly_appliance_kwh,
         total = hp + gad
 
         if tariff_kind == "누진제":
-            # 비율분배(엑셀 R열 방식): 전체 청구액 × HP 사용량 비중
-            billing = calc_progressive_billing(total, m+1, solar_offset=solar)
-            hp_won = round(billing * hp / total) if total > 0 else 0
+            # 증분비용 방식(엑셀 설계자 기준): HP가 일으킨 한계 청구액만 귀속
+            # = 청구액(HP+가전) − 청구액(가전만). 누진 상위구간·슈퍼유저요금이 HP에 온전히 귀속됨.
+            bill_with = calc_progressive_billing(total, m+1, solar_offset=solar)
+            bill_base = calc_progressive_billing(gad,   m+1, solar_offset=solar)
+            hp_won = max(0, bill_with - bill_base)
 
         elif tariff_kind == "일반용":
             # HP 전용 미터 — 가전·태양광 무관
@@ -1064,8 +1079,8 @@ with col_opt:
         st.caption("ℹ️ 일반용은 HP 전용 별도 미터라서 태양광 발전 영향이 없습니다.")
     if tariff_choice_simple == "누진제":
         st.caption(
-            "ℹ️ 누진제는 주택용 저압 누진 요금입니다. 전체 전기요금을 HP 사용량 비중만큼 "
-            "난방요금으로 배분해 계산합니다 (엑셀과 동일)."
+            "ℹ️ 누진제는 동·하계 월 1,000kWh 초과분에 슈퍼유저요금(736.2원/kWh)이 적용되며, "
+            "HP가 일으킨 증분 비용을 난방요금으로 귀속해 계산합니다 (엑셀 설계자 기준)."
         )
 
 # ── tariff_label 재구성 (기존 TARIFF_LABEL_MAP 5개 키와 호환) ──
@@ -1248,7 +1263,7 @@ if st.session_state.analyzed:
         delta=f"{round(result['saving_ratio'] * 100)}% 절감",
     )
 
-    # ─── 8-3-2. 누진제 산정 방식 안내 (비율분배) ──────
+    # ─── 8-3-2. 누진제 산정 방식 안내 (슈퍼유저요금 + 증분비용, 엑셀 설계자 기준) ──────
     if tariff_choice == "누진제":
         st.markdown(f"""
 <div style='margin:8px 0 4px 0; padding:14px 18px; background:#fef7e6;
@@ -1257,8 +1272,10 @@ if st.session_state.analyzed:
     📌 누진제 HP 전기요금은 이렇게 계산했어요
   </p>
   <p style='color:#78350f; font-size:0.9rem; line-height:1.65; margin:0;'>
-    전체 전기요금(HP+가전)을 누진제로 계산한 뒤, <b>HP 사용량 비중만큼</b>을 HP 난방요금으로
-    배분했습니다 (엑셀 전기요금 시트와 동일한 비율분배 방식).
+    히트펌프가 전기 사용량을 끌어올려 발생하는 추가 비용 — 누진 상위구간과
+    <b>슈퍼유저요금</b>(동·하계 월 1,000kWh 초과분 736.2원/kWh) — 은 히트펌프 도입으로 생긴
+    실제 비용입니다. 따라서 <b>증분비용 방식</b>(= HP+가전 청구액 − 가전만 청구액)으로 그 비용을
+    전부 히트펌프 난방요금에 귀속해 계산합니다. <span style='color:#92400e;'>(엑셀 설계자 산정 기준)</span>
   </p>
 </div>
 """, unsafe_allow_html=True)
@@ -1383,7 +1400,9 @@ if st.session_state.analyzed:
             "(가전·취사 사용분은 제외 — 기존 난방비와 동일 기준 비교)."
         )
         st.caption(
-            "🔌 **누진제 산정 방식**: 전체 전기요금(HP+가전)을 HP 사용량 비중으로 나눠 HP 몫을 산정합니다 (엑셀 비율분배 방식)."
+            "🔌 **누진제 산정 방식**: HP가 일으킨 *증분 비용*(= HP+가전 청구액 − 가전만 청구액)으로 계산합니다. "
+            "동·하계 월 1,000kWh 초과분에는 슈퍼유저요금(736.2원/kWh)이 반영되어, "
+            "히트펌프가 밀어올린 고누진·슈퍼 구간이 난방요금에 귀속됩니다."
         )
         st.caption(
             f"📅 **월별 분배 기준**: 입력하신 광역시도({region})의 평균 월별 난방 비중을 사용자의 1월 입력값에 비례하여 분배한 추정치입니다. "
