@@ -1285,22 +1285,29 @@ if st.session_state.analyzed:
     # ─── 8-3. 전기요금 분석 ──────────────────────────────────────────
     st.markdown('<div class="section-title">💰 전기요금 분석</div>', unsafe_allow_html=True)
     s1, s2, s3 = st.columns(3)
-    s1.metric(
-        "HP 연간 전기요금",
-        f"{result['hp_annual_man']:,.1f} 만원",
-    )
-    s2.metric(
-        f"기존 연간 난방비 ({fuel_key})",
-        f"{result['ex_annual_man']:,.1f} 만원",
-    )
-    # 절감(HP가 더 쌈) → 양수·"절감"·녹색↑ / 인상(HP가 더 비쌈) → 음수·"인상"·빨강↓
-    _save_pct  = round(result['saving_ratio'] * 100)
-    _save_word = "절감" if result['saving_man'] >= 0 else "인상"
-    s3.metric(
-        "연간 절감액",
-        f"{result['saving_man']:,.1f} 만원",
-        delta=f"{_save_pct}% {_save_word}",
-    )
+
+    def _metric_card(_label, _value, _delta=""):
+        return (
+            "<div style='padding:2px 0 4px 0;'>"
+            f"<div style='color:#78716c; font-size:0.85rem; font-weight:500; margin-bottom:4px;'>{_label}</div>"
+            f"<div style='color:#1c1917; font-size:2.1rem; font-weight:700; line-height:1.25;'>{_value}</div>"
+            f"{_delta}</div>"
+        )
+
+    s1.markdown(_metric_card("HP 연간 전기요금", f"{result['hp_annual_man']:,.1f} 만원"),
+                unsafe_allow_html=True)
+    s2.markdown(_metric_card(f"기존 연간 난방비 ({fuel_key})", f"{result['ex_annual_man']:,.1f} 만원"),
+                unsafe_allow_html=True)
+    # 절감(HP가 더 쌈) → 비용 감소이므로 ▼·녹색 / 인상(HP가 더 비쌈) → 비용 증가이므로 ▲·빨강
+    _abs_pct = abs(round(result['saving_ratio'] * 100))
+    if result['saving_man'] >= 0:
+        _arrow, _color, _word = "▼", "#047857", "절감"
+    else:
+        _arrow, _color, _word = "▲", "#dc2626", "인상"
+    _delta_html = (f"<div style='color:{_color}; font-size:0.88rem; font-weight:600; "
+                   f"margin-top:5px;'>{_arrow} {_abs_pct}% {_word}</div>")
+    s3.markdown(_metric_card("연간 절감액", f"{result['saving_man']:,.1f} 만원", _delta_html),
+                unsafe_allow_html=True)
 
     # ─── 8-4. 환경 기여 박스 (Sheet2 행 65 기반) ─────────────────────
     # 사용자 입력 기준 — 현재 사용 중인 난방 연료 vs HP 연간 배출량만 비교.
