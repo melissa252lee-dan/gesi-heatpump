@@ -1444,10 +1444,12 @@ if st.session_state.analyzed:
         df_donut = pd.DataFrame({
             "구분": [f"기존 ({fuel_key})", "HP (전기+투자비)"],
             "금액": [total_ex_15yr, total_hp_15yr],
+            "순서": [0, 1],   # stack 정렬 고정용 — 라벨/색 어긋남 방지
         })
 
         donut = alt.Chart(df_donut).mark_arc(innerRadius=70, outerRadius=120).encode(
             theta=alt.Theta("금액:Q", stack=True),
+            order=alt.Order("순서:Q"),
             color=alt.Color(
                 "구분:N",
                 scale=alt.Scale(
@@ -1467,6 +1469,7 @@ if st.session_state.analyzed:
             radius=95, fontSize=15, fontWeight="bold", color="white",
         ).encode(
             theta=alt.Theta("금액:Q", stack=True),
+            order=alt.Order("순서:Q"),
             text=alt.Text("금액:Q", format=",d"),
         )
 
