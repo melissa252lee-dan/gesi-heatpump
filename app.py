@@ -1294,42 +1294,24 @@ if st.session_state.analyzed:
         )
 
     # ─── 8-3. 전기요금 분석 ──────────────────────────────────────────
-    st.markdown('<div class="section-title">💰 전기요금 분석 (엑셀 데이터 기반)</div>', unsafe_allow_html=True)
+    st.markdown('<div class="section-title">💰 전기요금 분석</div>', unsafe_allow_html=True)
     s1, s2, s3 = st.columns(3)
     s1.metric(
         "HP 연간 전기요금",
         f"{result['hp_annual_man']:,.1f} 만원",
-        help=f"사용자 1월 입력 → 연간 난방비 → Sheet2 행 43·44 → HP kWh → [{tariff_label}] 단가 적용"
     )
     s2.metric(
         f"기존 연간 난방비 ({fuel_key})",
         f"{result['ex_annual_man']:,.1f} 만원",
-        help="사용자 입력한 1월 난방비를 해당 광역시도의 1월 비중으로 나눠 연간 추정"
     )
+    # 절감(HP가 더 쌈) → 양수·"절감"·녹색↑ / 인상(HP가 더 비쌈) → 음수·"인상"·빨강↓
+    _save_pct  = round(result['saving_ratio'] * 100)
+    _save_word = "절감" if result['saving_man'] >= 0 else "인상"
     s3.metric(
         "연간 절감액",
         f"{result['saving_man']:,.1f} 만원",
-        delta=f"{round(result['saving_ratio'] * 100)}% 절감",
+        delta=f"{_save_pct}% {_save_word}",
     )
-
-    # ─── 8-3-2. 누진제 산정 방식 안내 (슈퍼유저요금 + 증분비용, 엑셀 설계자 기준) ──────
-    if tariff_choice == "누진제":
-        st.markdown(f"""
-<div style='margin:8px 0 4px 0; padding:14px 18px; background:#fef7e6;
-            border-left:3px solid #d97706; border-radius:8px;'>
-  <p style='color:#854d0e; font-size:0.95rem; font-weight:700; margin:0 0 6px 0;'>
-    📌 누진제 HP 전기요금, 이렇게 계산했어요
-  </p>
-  <p style='color:#78350f; font-size:0.9rem; line-height:1.65; margin:0;'>
-    전기요금 누진제는 많이 쓸수록 단가가 비싸져요. 히트펌프를 켜면 전기 사용량이 늘어나는데,
-    그 늘어난 전기는 단가가 높은 <b>누진 상위구간</b>에서 요금이 매겨져요. 특히 여름·겨울엔
-    월 1,000kWh를 넘기면 초과분에 <b>슈퍼유저요금</b>(736.2원/kWh)이 붙고요. 그래서
-    <b>'히트펌프 때문에 늘어난 요금'만 따로</b> 떼어 계산했어요 — 전체 전기요금(가전+히트펌프)에서
-    <b>가전만 썼을 때의 요금을 빼는</b> 방식이에요. 이 차액이 히트펌프를 들이면서 실제로 더 내게 되는
-    난방요금이에요.
-  </p>
-</div>
-""", unsafe_allow_html=True)
 
     # ─── 8-4. 환경 기여 박스 (Sheet2 행 65 기반) ─────────────────────
     # 사용자 입력 기준 — 현재 사용 중인 난방 연료 vs HP 연간 배출량만 비교.
@@ -1393,7 +1375,6 @@ if st.session_state.analyzed:
   </table>
   <p style='font-size:0.82rem; color:#78716c; margin:10px 0 0 0; line-height:1.5;'>
     * HP 배출량은 난방·온수 등 HP의 전기 사용분 포함 기준 (2026년 그리드).
-    15년에 걸쳐 그리드 청정화로 HP 배출량은 점차 감소합니다 (2040년 약 0.20 t).
   </p>
 </div>
 """, unsafe_allow_html=True)
@@ -1442,7 +1423,6 @@ if st.session_state.analyzed:
             "월별 절감액(만원)": monthly_stats["savings"],
             "절감률":            monthly_stats["pct"],
             "누적 절감액(만원)": monthly_stats["cumulative"],
-            "CO₂ 절감(kg)":     monthly_stats["co2"],
             "HP 전력 사용(kWh)": kwh["monthly_hp"],
         })
         st.dataframe(df_detail, use_container_width=True, hide_index=True)
@@ -1451,13 +1431,8 @@ if st.session_state.analyzed:
             "(가전·취사 사용분은 제외 — 기존 난방비와 동일 기준 비교)."
         )
         st.caption(
-            "🔌 **누진제 계산법**: 전체 전기요금(가전+히트펌프)에서 가전만 썼을 때의 요금을 뺀 차액을 "
-            "히트펌프 난방요금으로 봐요. 히트펌프로 늘어난 전기가 단가 높은 **누진 상위구간**(여름·겨울 월 "
-            "1,000kWh 초과분은 **슈퍼유저요금** 736.2원/kWh)에서 매겨지는 부분까지 포함돼요."
-        )
-        st.caption(
             f"📅 **월별 분배 기준**: 입력하신 광역시도({region})의 평균 월별 난방 비중을 사용자의 1월 입력값에 비례하여 분배한 추정치입니다. "
-            "여름철에도 온수·취사 등으로 일부 가스 비용이 발생하는 것이 반영되어 있습니다."
+            "여름철에도 온수 사용으로 인한 비용이 발생됩니다."
         )
 
     # ─── 8-7. 장기 차트 ──────────────────────────────────────────────
