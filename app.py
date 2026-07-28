@@ -1163,12 +1163,21 @@ with col_sim:
     )
 
 with col_opt:
-    self_pay_won = st.number_input(
+    # 설치 자부담 금액 — 천단위 콤마 자동 표기 (입력 확정 시 1400000 → 1,400,000)
+    def _fmt_self_pay():
+        raw = st.session_state.get("self_pay_input", "")
+        digits = "".join(ch for ch in raw if ch.isdigit())
+        n = int(digits) if digits else 0
+        n = min(n, CAPEX_TOTAL_MAN * 10000)   # 설치비 1,400만원 상한
+        st.session_state["self_pay_input"] = f"{n:,}"
+
+    st.text_input(
         "설치 자부담 금액 (원)",
-        min_value=0, max_value=CAPEX_TOTAL_MAN * 10000,
-        value=CAPEX_TOTAL_MAN * 10000, step=100000,
+        value="0", key="self_pay_input", on_change=_fmt_self_pay,
         help="보조금을 받는 경우, 실제로 본인이 부담하는 금액을 원 단위로 입력하세요.",
     )
+    self_pay_won = int("".join(ch for ch in st.session_state["self_pay_input"] if ch.isdigit()) or 0)
+    self_pay_won = min(self_pay_won, CAPEX_TOTAL_MAN * 10000)
     self_pay_man = self_pay_won / 10000   # 내부 계산은 만원 단위
 
     st.markdown("---")
