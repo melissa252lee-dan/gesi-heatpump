@@ -1,5 +1,7 @@
 streamlit
 pandas
+altair
 openpyxl
 Pillow
-altair
+gspread
+google-auth

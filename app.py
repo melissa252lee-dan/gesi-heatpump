@@ -12,6 +12,7 @@
 초과분 736.2원/kWh)이 모두 히트펌프 쪽에 잡힌다. 계약전력은 Sheet2!C4 ÷ 3으로 산정.
 """
 import os
+from datetime import datetime, timezone, timedelta
 import pandas as pd
 import streamlit as st
 import altair as alt
@@ -271,8 +272,9 @@ SOUTHERN_GYEONGBUK = {"울진군", "영덕군", "포항시", "경주시", "청�
 NORTHERN_GYEONGBUK = {"봉화군", "청송군"}  # 경북 북쪽 → 중부1
 INNER_GYEONGNAM = {"거창군", "함양군"}  # 경남 내륙 → 중부2 (다른 경남은 남부)
 
-# ── 보조금 (만원) ── 난방 전기화 사업: 설치비 1,000만원의 70% 지원
-SUBSIDY_TOTAL = 700
+# ── 설치비 (만원) ── 국내 기업 평균 견적 기준 (본체+설치비+부대공사 포함)
+# 보조금은 고정 비율(70%) 대신 사용자가 '자부담 금액'을 직접 입력하는 방식으로 변경.
+CAPEX_TOTAL_MAN = 1400
 
 # ══════════════════════════════════════════════════════════════════════
 # 3. 데이터 로더
@@ -444,6 +446,73 @@ def load_tariff_xlsx():
         }, None
     except Exception as e:
         return None, str(e)
+
+
+# ══════════════════════════════════════════════════════════════════════
+# 3-1. 사용자 입력 수집 (Google Sheets)
+# ══════════════════════════════════════════════════════════════════════
+# Streamlit Community Cloud는 재시작 시 로컬 파일이 사라지므로,
+# 구글 서비스 계정 + gspread로 스프레드시트에 한 줄씩 기록한다.
+#
+# 설정 방법 (secrets.toml — 로컬은 .streamlit/secrets.toml, 배포는 앱 Settings > Secrets):
+#   [gcp_service_account]
+#   type = "service_account"
+#   project_id = "..."
+#   private_key_id = "..."
+#   private_key = "-----BEGIN PRIVATE KEY-----\n...\n-----END PRIVATE KEY-----\n"
+#   client_email = "xxx@xxx.iam.gserviceaccount.com"
+#   client_id = "..."
+#   token_uri = "https://oauth2.googleapis.com/token"
+#
+#   [gsheet]
+#   spreadsheet_id = "구글시트 URL의 /d/와 /edit 사이 ID"
+#   worksheet = "응답"
+#
+# 시크릿이 없으면 수집 없이 앱은 정상 동작한다 (조용히 skip).
+
+LOG_HEADER = [
+    "수집시각(KST)", "광역", "기초", "주거형태", "평수",
+    "1월난방비(만원)", "1월전기(kWh)", "난방방식", "취사기기",
+    "요금제", "태양광설치", "태양광용량(kW)", "자부담금액(원)",
+    "연료인상률(%)", "전기인상률(%)",
+]
+
+
+@st.cache_resource
+def _get_gsheet():
+    """gspread 워크시트 핸들 — 시크릿 미설정 시 None."""
+    if "gcp_service_account" not in st.secrets or "gsheet" not in st.secrets:
+        return None
+    try:
+        import gspread
+        from google.oauth2.service_account import Credentials
+        scopes = ["https://www.googleapis.com/auth/spreadsheets"]
+        creds = Credentials.from_service_account_info(
+            dict(st.secrets["gcp_service_account"]), scopes=scopes)
+        gc = gspread.authorize(creds)
+        sh = gc.open_by_key(st.secrets["gsheet"]["spreadsheet_id"])
+        ws_name = st.secrets["gsheet"].get("worksheet", "응답")
+        try:
+            ws = sh.worksheet(ws_name)
+        except gspread.WorksheetNotFound:
+            ws = sh.add_worksheet(title=ws_name, rows=1000, cols=len(LOG_HEADER))
+        # 헤더가 없으면 1행에 기록
+        if not ws.row_values(1):
+            ws.append_row(LOG_HEADER, value_input_option="USER_ENTERED")
+        return ws
+    except Exception:
+        return None
+
+
+def log_user_input(row_values):
+    """분석 실행 시 입력값 1행 기록. 실패해도 앱 흐름은 막지 않는다."""
+    ws = _get_gsheet()
+    if ws is None:
+        return
+    try:
+        ws.append_row(row_values, value_input_option="USER_ENTERED")
+    except Exception:
+        pass
 
 
 # ══════════════════════════════════════════════════════════════════════
@@ -1006,7 +1075,7 @@ st.markdown("""
         <span style='color:#94a3b8; font-size:0.9rem;'>(고지서를 참고하시면 가장 정확합니다)</span></li>
       <li>사용 중인 <b>전기 요금제</b>를 5가지 중 하나 골라주세요
         <span style='color:#94a3b8; font-size:0.9rem;'>(태양광 설치 여부 포함)</span></li>
-      <li>받을 수 있는 <b>보조금</b>을 체크하세요</li>
+      <li>보조금을 받는 경우, 실제로 부담하시는 <b>자부담 금액</b>을 입력하세요</li>
       <li><b>'경제성·환경성 분석 실행'</b> 버튼을 누르면 끝!
         절감액·투자 회수 기간이 한 눈에 보입니다.</li>
     </ol>
@@ -1014,7 +1083,7 @@ st.markdown("""
 
   <div style='margin-top:22px; padding:14px 18px; background:#e6f4f1; border-left:3px solid #0f766e; border-radius:8px;'>
     <p style='color:#134e4a; font-size:0.95rem; line-height:1.6; margin:0;'>
-      ℹ️ <b>참고</b>: 본 어플리케이션에서는 히트펌프의 설치 비용을 <b>1,000만원</b>으로 설정하였습니다.
+      ℹ️ <b>참고</b>: 본 어플리케이션에서는 히트펌프의 설치 비용을 <b>1,400만원</b>으로 설정하였습니다.
       <span style='color:#78716c; font-size:0.88rem;'>(국내 기업 평균 견적 기준 — 본체+설치비+부대공사 포함)</span>
     </p>
   </div>
@@ -1094,11 +1163,13 @@ with col_sim:
     )
 
 with col_opt:
-    use_subsidy = st.checkbox("보조금 적용 (70%)", value=False)
-    st.caption(
-        "⚠️ 난방 전기화 사업: 설치비의 70% 지원. "
-        "2026년 현재 제주/경남/전남만 지원 가능, 신청 전 확인 필수."
+    self_pay_won = st.number_input(
+        "설치 자부담 금액 (원)",
+        min_value=0, max_value=CAPEX_TOTAL_MAN * 10000,
+        value=CAPEX_TOTAL_MAN * 10000, step=100000,
+        help="보조금을 받는 경우, 실제로 본인이 부담하는 금액을 원 단위로 입력하세요.",
     )
+    self_pay_man = self_pay_won / 10000   # 내부 계산은 만원 단위
 
     st.markdown("---")
     st.markdown("**전기 요금제 선택**")
@@ -1135,7 +1206,7 @@ else:
 # 입력 변경 감지 → 분석 결과 초기화
 _input_signature = (winter_heat_man, winter_elec_kwh, region, house_type, house_size,
                     heating_type, cooking_type, fuel_inflation, elec_inflation,
-                    solar_capa_kw, use_subsidy, tariff_label)
+                    solar_capa_kw, self_pay_won, tariff_label)
 if st.session_state.get("_last_input_key") != _input_signature:
     st.session_state.analyzed = False
     st.session_state["_last_input_key"] = _input_signature
@@ -1143,8 +1214,23 @@ if st.session_state.get("_last_input_key") != _input_signature:
 if "analyzed" not in st.session_state:
     st.session_state.analyzed = False
 
+st.markdown(
+    "<div style='text-align:center; color:#78716c; font-size:0.85rem; margin:6px 0 10px 0;'>"
+    "입력하신 정보는 통계 목적으로 수집됩니다."
+    "</div>",
+    unsafe_allow_html=True,
+)
+
 if st.button("경제성·환경성 분석 실행", type="primary", use_container_width=True):
     st.session_state.analyzed = True
+    # ── 입력값 수집 (Google Sheets) — 버튼 클릭 시점에 1행 기록 ──
+    _kst_now = datetime.now(timezone(timedelta(hours=9))).strftime("%Y-%m-%d %H:%M:%S")
+    log_user_input([
+        _kst_now, region, sub_region, house_type, house_size,
+        winter_heat_man, winter_elec_kwh, heating_type, cooking_type,
+        tariff_choice_simple, solar_install, solar_capa_kw, self_pay_won,
+        fuel_inflation, elec_inflation,
+    ])
 
 
 # ══════════════════════════════════════════════════════════════════════
@@ -1204,10 +1290,10 @@ if st.session_state.analyzed:
         ex_annual_won=user_annual_cost_won,
     )
 
-    # 보조금 및 투자비
-    total_subsidy = SUBSIDY_TOTAL if use_subsidy else 0
-    capex_man     = 1000  # 국내 기업 평균 견적 기준 — UI 안내문구 참조
-    net_capex_man = max(0, capex_man - total_subsidy)
+    # 보조금 및 투자비 — 사용자가 입력한 자부담 금액이 곧 순투자비
+    capex_man     = CAPEX_TOTAL_MAN   # 총 설치비 1,400만원 — UI 안내문구 참조
+    total_subsidy = capex_man - self_pay_man
+    net_capex_man = max(0, self_pay_man)
 
     # 15년 시뮬레이션
     ann_heat_base = result["ex_annual_man"]
