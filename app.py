@@ -461,14 +461,36 @@ GSHEET_WEBHOOK_URL = (
     "AKfycbx862Kd6hS_O9sUk3DzFPyaH2koTChyyZbr78NuQFdFLDFmcaHsI_uRhY57OkPX2nLo/exec"
 )
 
+# 구글시트에 저장할 입력값·핵심 결과값의 열 이름.
+# 월별·15년 상세 값은 JSON 한 셀에 함께 저장해 전체 결과를 보존한다.
+LOG_HEADER = [
+    "수집시각(KST)", "광역", "기초", "기후존", "주거형태", "평수",
+    "1월난방비(만원)", "1월전기(kWh)", "기존난방방식", "취사기기",
+    "선택요금제", "적용요금제", "태양광설치", "태양광용량(kW)",
+    "자부담금액(원)", "연료인상률(%)", "전기인상률(%)",
+    "기존연간난방비(만원)", "HP연간전기요금(만원)",
+    "연간절감액(만원)", "연간절감률(%)", "투자회수시점",
+    "15년순이익(만원)", "총설치비(만원)", "추정보조금(만원)",
+    "순투자비(만원)", "HP설치공간", "HP용량",
+    "기존연료사용량(kWh/년)", "유효열수요(kWh/년)",
+    "HP전력사용량(kWh/년)", "에너지효율배수",
+    "추정가전전력(kWh/년)", "태양광발전량(kWh/년)",
+    "기존연간CO2(kg)", "HP연간CO2(kg)", "연간CO2절감(kg)",
+    "15년기존총비용(만원)", "15년HP총비용(만원)",
+    "15년누적CO2절감(kg)", "2040년HP_CO2(kg)",
+    "2026대비2040_HP_CO2감소율(%)",
+    "월별상세(JSON)", "15년비용상세(JSON)", "15년CO2상세(JSON)",
+    "계산기버전",
+]
+
 
 def log_user_input(row_values):
-    """분석 실행 시 입력값을 Apps Script로 전송한다.
+    """분석 실행 시 입력값과 결과값을 Apps Script로 전송한다.
 
     저장 실패가 계산기 기능을 중단시키지 않도록 False만 반환한다.
     """
     payload = json.dumps(
-        {"values": row_values},
+        {"headers": LOG_HEADER, "values": row_values},
         ensure_ascii=False,
     ).encode("utf-8")
 
@@ -1201,16 +1223,11 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
-if st.button("경제성·환경성 분석 실행", type="primary", use_container_width=True):
+analysis_submitted = st.button(
+    "경제성·환경성 분석 실행", type="primary", use_container_width=True
+)
+if analysis_submitted:
     st.session_state.analyzed = True
-    # ── 입력값 수집 (Google Sheets) — 버튼 클릭 시점에 1행 기록 ──
-    _kst_now = datetime.now(timezone(timedelta(hours=9))).strftime("%Y-%m-%d %H:%M:%S")
-    log_user_input([
-        _kst_now, region, sub_region, house_type, house_size,
-        winter_heat_man, winter_elec_kwh, heating_type, cooking_type,
-        tariff_choice_simple, solar_install, solar_capa_kw, self_pay_won,
-        fuel_inflation, elec_inflation,
-    ])
 
 
 # ══════════════════════════════════════════════════════════════════════
@@ -1748,3 +1765,72 @@ if st.session_state.analyzed:
         "단열 상태, 사용 습관, 실제 요금제 변동, 설치 환경 등에 따라 결과가 달라질 수 있습니다. "
         "실제 도입 전에는 전문가 견적과 한국전력 공급 약관, 지자체 보조금 공고를 반드시 확인해 주세요."
     )
+
+    # ─── 8-9. 입력값 + 전체 결과값 저장 ─────────────────────────────
+    # 버튼을 누른 바로 그 실행에서만 1회 저장한다. 화면 재실행만으로 중복 저장되지 않는다.
+    if analysis_submitted:
+        _kst_now = datetime.now(timezone(timedelta(hours=9))).strftime("%Y-%m-%d %H:%M:%S")
+
+        _monthly_detail = [
+            {
+                "월": m,
+                "기존난방비_만원": monthly_ex_man[m-1],
+                "HP난방요금_만원": result["monthly_man"][m-1],
+                "절감액_만원": monthly_stats["savings"][m-1],
+                "절감률": monthly_stats["pct"][m-1],
+                "누적절감액_만원": monthly_stats["cumulative"][m-1],
+                "HP전력_kWh": kwh["monthly_hp"][m-1],
+                "가전전력_kWh": round(user_monthly_appliance_kwh[m-1], 1),
+                "태양광발전_kWh": round(monthly_solar[m-1], 1) if monthly_solar else 0,
+                "CO2절감_kg": monthly_stats["co2"][m-1],
+            }
+            for m in months
+        ]
+
+        _cost_15yr_detail = [
+            {
+                "연차": years[i],
+                "기존누적비용_만원": gas_cum[i],
+                "HP누적비용_만원": hp_cum[i],
+                "누적순이익_만원": net_profit[i],
+            }
+            for i in range(len(years))
+        ]
+
+        _co2_15yr_detail = [
+            {
+                "연차": years_15[i],
+                "기존CO2_kg": round(co2_15_ex[i], 1),
+                "HP_CO2_kg": round(co2_15_hp[i], 1),
+                "연간절감_kg": round(co2_15_save[i], 1),
+                "누적절감_kg": round(co2_15_cum[i], 1),
+            }
+            for i in range(len(years_15))
+        ]
+
+        _log_row = [
+            _kst_now, region, sub_region, zone, house_type, house_size,
+            winter_heat_man, winter_elec_kwh, heating_type, cooking_type,
+            tariff_choice_simple, tariff_label, solar_install, solar_capa_kw,
+            self_pay_won, fuel_inflation, elec_inflation,
+            result["ex_annual_man"], result["hp_annual_man"],
+            result["saving_man"], round(result["saving_ratio"] * 100, 1),
+            payback_year, net_profit[-1], capex_man, total_subsidy,
+            net_capex_man, hp_space, hp_capacity,
+            kwh["fuel_input_annual"], kwh["heat_demand_annual"],
+            kwh["annual_hp"], kwh["efficiency"],
+            round(user_annual_elec_kwh, 1), round(solar_annual_kwh, 1),
+            round(co2["ex_kg"], 1), round(co2["hp_kg"], 1),
+            round(co2["saving_kg"], 1),
+            total_ex_15yr, total_hp_15yr, round(total_15yr_kg, 1),
+            round(co2_15_hp[-1], 1), round(hp_reduction_pct, 1),
+            json.dumps(_monthly_detail, ensure_ascii=False),
+            json.dumps(_cost_15yr_detail, ensure_ascii=False),
+            json.dumps(_co2_15yr_detail, ensure_ascii=False),
+            "2026-07-full-log-v1",
+        ]
+
+        _saved = log_user_input(_log_row)
+        if _saved:
+            st.toast("입력값과 분석 결과가 저장되었습니다.")
+
