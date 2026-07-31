@@ -458,7 +458,7 @@ def load_tariff_xlsx():
 
 GSHEET_WEBHOOK_URL = (
     "https://script.google.com/macros/s/"
-    "AKfycbz86LySiBKV73YkDq6eSDuLRTO3P0-faUy_6CgboRIRhX8vwPEi6ua9jL57Y_EEdXx8/exec"
+    "AKfycbx862Kd6hS_O9sUk3DzFPyaH2koTChyyZbr78NuQFdFLDFmcaHsI_uRhY57OkPX2nLo/exec"
 )
 
 
