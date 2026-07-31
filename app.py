@@ -12,6 +12,8 @@
 초과분 736.2원/kWh)이 모두 히트펌프 쪽에 잡힌다. 계약전력은 Sheet2!C4 ÷ 3으로 산정.
 """
 import os
+import json
+import urllib.request
 from datetime import datetime, timezone, timedelta
 import pandas as pd
 import streamlit as st
@@ -449,70 +451,39 @@ def load_tariff_xlsx():
 
 
 # ══════════════════════════════════════════════════════════════════════
-# 3-1. 사용자 입력 수집 (Google Sheets)
+# 3-1. 사용자 입력 수집 (Google Sheets Apps Script)
 # ══════════════════════════════════════════════════════════════════════
-# Streamlit Community Cloud는 재시작 시 로컬 파일이 사라지므로,
-# 구글 서비스 계정 + gspread로 스프레드시트에 한 줄씩 기록한다.
-#
-# 설정 방법 (secrets.toml — 로컬은 .streamlit/secrets.toml, 배포는 앱 Settings > Secrets):
-#   [gcp_service_account]
-#   type = "service_account"
-#   project_id = "..."
-#   private_key_id = "..."
-#   private_key = "-----BEGIN PRIVATE KEY-----\n...\n-----END PRIVATE KEY-----\n"
-#   client_email = "xxx@xxx.iam.gserviceaccount.com"
-#   client_id = "..."
-#   token_uri = "https://oauth2.googleapis.com/token"
-#
-#   [gsheet]
-#   spreadsheet_id = "구글시트 URL의 /d/와 /edit 사이 ID"
-#   worksheet = "응답"
-#
-# 시크릿이 없으면 수집 없이 앱은 정상 동작한다 (조용히 skip).
+# 분석 실행 버튼을 누르면 Apps Script 웹 앱으로 입력값을 전송한다.
+# Google Cloud 서비스 계정이나 gspread 설정은 필요하지 않다.
 
-LOG_HEADER = [
-    "수집시각(KST)", "광역", "기초", "주거형태", "평수",
-    "1월난방비(만원)", "1월전기(kWh)", "난방방식", "취사기기",
-    "요금제", "태양광설치", "태양광용량(kW)", "자부담금액(원)",
-    "연료인상률(%)", "전기인상률(%)",
-]
-
-
-@st.cache_resource
-def _get_gsheet():
-    """gspread 워크시트 핸들 — 시크릿 미설정 시 None."""
-    if "gcp_service_account" not in st.secrets or "gsheet" not in st.secrets:
-        return None
-    try:
-        import gspread
-        from google.oauth2.service_account import Credentials
-        scopes = ["https://www.googleapis.com/auth/spreadsheets"]
-        creds = Credentials.from_service_account_info(
-            dict(st.secrets["gcp_service_account"]), scopes=scopes)
-        gc = gspread.authorize(creds)
-        sh = gc.open_by_key(st.secrets["gsheet"]["spreadsheet_id"])
-        ws_name = st.secrets["gsheet"].get("worksheet", "응답")
-        try:
-            ws = sh.worksheet(ws_name)
-        except gspread.WorksheetNotFound:
-            ws = sh.add_worksheet(title=ws_name, rows=1000, cols=len(LOG_HEADER))
-        # 헤더가 없으면 1행에 기록
-        if not ws.row_values(1):
-            ws.append_row(LOG_HEADER, value_input_option="USER_ENTERED")
-        return ws
-    except Exception:
-        return None
+GSHEET_WEBHOOK_URL = (
+    "https://script.google.com/macros/s/"
+    "AKfycbz86LySiBKV73YkDq6eSDuLRTO3P0-faUy_6CgboRIRhX8vwPEi6ua9jL57Y_EEdXx8/exec"
+)
 
 
 def log_user_input(row_values):
-    """분석 실행 시 입력값 1행 기록. 실패해도 앱 흐름은 막지 않는다."""
-    ws = _get_gsheet()
-    if ws is None:
-        return
+    """분석 실행 시 입력값을 Apps Script로 전송한다.
+
+    저장 실패가 계산기 기능을 중단시키지 않도록 False만 반환한다.
+    """
+    payload = json.dumps(
+        {"values": row_values},
+        ensure_ascii=False,
+    ).encode("utf-8")
+
+    request = urllib.request.Request(
+        GSHEET_WEBHOOK_URL,
+        data=payload,
+        headers={"Content-Type": "application/json; charset=utf-8"},
+        method="POST",
+    )
+
     try:
-        ws.append_row(row_values, value_input_option="USER_ENTERED")
+        with urllib.request.urlopen(request, timeout=8) as response:
+            return 200 <= response.getcode() < 400
     except Exception:
-        pass
+        return False
 
 
 # ══════════════════════════════════════════════════════════════════════
