@@ -10,6 +10,15 @@
 즉 히트펌프가 추가로 일으킨 요금(= HP+가전 청구액 − 가전만 청구액)만 난방요금에
 귀속하며, 이때 히트펌프가 끌어올린 누진 상위구간과 슈퍼유저요금(동·하계 월 1,000kWh
 초과분 736.2원/kWh)이 모두 히트펌프 쪽에 잡힌다. 계약전력은 Sheet2!C4 ÷ 3으로 산정.
+
+[2026-08] 엑셀 개정판 반영:
+  • 베이크 시나리오가 제주(제주시, 32평, 1월 난방 20만원, 1월 전기 1,500kWh)로 변경됨.
+    → 앱은 모든 값을 동적으로 로드/재계산하므로 셀 위치·수식 로직은 그대로 호환.
+  • 전기요금 시트에 '가전만 청구합계(차감기준)' 표(T5:X17)가 추가됨 — 증분비용 방식의
+    차감 기준선을 엑셀에도 명시한 것. 앱은 calc_progressive_billing/calc_tou_billing으로
+    동일 값을 직접 계산하므로 별도 로드 불필요 (스모크 테스트로 전월 일치 확인).
+  • COP_계산기 파라미터 갱신(공급수 온도 55°C 기준)으로 sCOP가
+    중부1 2.82 / 중부2 2.89 / 남부 3.12 / 제주 3.25로 변경 — 동적 로드로 자동 반영.
 """
 import os
 import json
@@ -189,7 +198,7 @@ TARIFF_LABEL_MAP = {
 # 실제 값은 load_tariff_xlsx()에서 동적 로드됨.
 
 # ── Sheet2 (kWh 기반 물리 데이터) 행 매핑 ──
-# 표준 가구(중부2, 거창군 32평, 연 65만원) 기준의 월별 에너지 흐름.
+# 표준 가구(제주, 제주시 32평, 1월 난방 20만원 = 연 약 113.8만원) 기준의 월별 에너지 흐름.
 #
 # [신규 엑셀 구조 — 2단계 모델]
 # 행 43: 실제 난방 에너지 사용량 (kWh) — 사용자가 실제 소비하는 연료량
@@ -290,6 +299,9 @@ def load_tariff_xlsx():
     각 블록 = (요금제, 태양광유무, 난방유형) 조합.
     블록 헤더 행: col 19=HP 연합계(원), col 20=기존난방비 연합계(원), col 21=Saving 비율
     헤더+1 ~ 헤더+12 행: 1~12월별 청구 내역 (col 9~18)
+    ※ [2026-08 개정판] T5:X17에 '가전만 청구합계(차감기준)' 표 추가 —
+      HP전기요금(col 18) = 청구요금합계 − 가전만 청구합계 (증분비용 방식).
+      앱은 동일 값을 calc_progressive_billing/calc_tou_billing으로 직접 계산하므로 로드하지 않음.
 
     [COP_계산기 시트 — 4개 기후존]
     각 존 3행씩: 월평균기온 / 월 HDD(Tbase=18°C) / 월 COP(난방시간 가중)
@@ -413,7 +425,7 @@ def load_tariff_xlsx():
             region_ratios[name] = ratios
 
         # ── 전기요금 시트 — 가전 월별 사용량 (행 23-34, col 3) ──
-        # 22년 전국 가구패널 기준 평균 가전 전력 사용량
+        # 엑셀 베이크 시나리오의 '기존 전기소비량' (사용자 미입력 시 fallback)
         appliance_kwh = [float(ws.cell(row=23+m, column=3).value or 0) for m in range(12)]
 
         # ── Sheet2 행 25 — 월별 전기요금 비중 (사용자 입력 1월 kWh → 12개월 분배용) ──
@@ -1010,11 +1022,11 @@ if excel_data:
     HDD_MONTHLY   = excel_data["hdd"]           # 동적 로드된 HDD (Tbase=18°C)
     MONTHLY_COP   = excel_data["monthly_cop"]   # 월별 COP (참고용)
     MONTHLY_TEMP  = excel_data["monthly_temp"]  # 월평균 기온 (참고용)
-    KWH_DEMAND    = excel_data["kwh_demand"]    # Sheet2: 연료별 월별 난방 수요 (참고용, 거창군 기준)
+    KWH_DEMAND    = excel_data["kwh_demand"]    # Sheet2: 연료별 월별 난방 수요 (참고용, 제주 베이크 기준)
     KWH_HP        = excel_data["kwh_hp"]        # Sheet2: 연료별 월별 HP 전력 사용량 (참고용)
     SHEET2_PARAMS = excel_data["sheet2_params"] # Sheet2: 연료별 효율/단가/기본요금/난방비중
     REGION_RATIOS = excel_data["region_ratios"] # Sheet3: 광역시도별 월별 난방 비중
-    APPLIANCE_KWH = excel_data["appliance_kwh"] # 전기요금 시트: 가전 월별 평균 사용량 (전국, 12개) — 사용자 입력 없을 때 fallback
+    APPLIANCE_KWH = excel_data["appliance_kwh"] # 전기요금 시트: '기존 전기소비량' (행 23-34, 제주 베이크) — 사용자 입력 없을 때 fallback
     ELEC_MONTHLY_RATIOS = excel_data["elec_monthly_ratios"]  # Sheet2 행 25: 월별 전기요금 비중 (합=1)
     SOLAR_KWH     = excel_data["solar_kwh"]     # 전기요금 시트: 17개 시도 월별 1kW당 태양광 발전량
     EMISSION_FACTORS_FUEL   = excel_data["emission_factors_fuel"]    # Sheet2 행 10 col 5-8: 연료별 배출계수 (kg/kWh)
@@ -1068,7 +1080,8 @@ st.markdown("""
         <span style='color:#94a3b8; font-size:0.9rem;'>(고지서를 참고하시면 가장 정확합니다)</span></li>
       <li>사용 중인 <b>전기 요금제</b>를 5가지 중 하나 골라주세요
         <span style='color:#94a3b8; font-size:0.9rem;'>(태양광 설치 여부 포함)</span></li>
-      <li>보조금을 받는 경우, 실제로 부담하시는 <b>자부담 금액</b>을 입력하세요</li>
+      <li>보조금을 받는 경우, 실제로 부담하시는 <b>자부담 금액(만원)</b>을 입력하세요
+        <span style='color:#94a3b8; font-size:0.9rem;'>(예: 70% 지원 시 420 / 지원 없으면 기본값 1,400)</span></li>
       <li><b>'경제성·환경성 분석 실행'</b> 버튼을 누르면 끝!
         절감액·투자 회수 기간이 한 눈에 보입니다.</li>
     </ol>
@@ -1104,7 +1117,7 @@ with col4:
     house_size = st.number_input("전용 면적 (평)", min_value=10, value=30)
 
 zone        = map_region_to_zone(region, sub_region)
-dynamic_cop = SCOP_BY_ZONE[zone]   # 로드 시점에 이미 2자리로 round됨 (2.90/3.18/3.43/3.56)
+dynamic_cop = SCOP_BY_ZONE[zone]   # sCOP raw 값 (중부1 2.82 / 중부2 2.89 / 남부 3.12 / 제주 3.25)
 
 # ── 섹션 2: 에너지 소비 ──
 st.markdown('<div class="section-title">2. 에너지 소비 현황</div>', unsafe_allow_html=True)
@@ -1161,17 +1174,31 @@ with col_opt:
         raw = st.session_state.get("self_pay_input", "")
         digits = "".join(ch for ch in raw if ch.isdigit())
         n = int(digits) if digits else 0
-        n = min(n, CAPEX_TOTAL_MAN * 10000)   # 설치비 1,400만원 상한
+        n = min(n, CAPEX_TOTAL_MAN)   # 설치비 1,400만원 상한
         st.session_state["self_pay_input"] = f"{n:,}"
 
     st.text_input(
-        "설치 자부담 금액 (원)",
-        value="0", key="self_pay_input", on_change=_fmt_self_pay,
-        help="보조금을 받는 경우, 실제로 본인이 부담하는 금액을 원 단위로 입력하세요.",
+        "설치자 부담금 (단위: 만 원)",
+        value="1,400", key="self_pay_input", on_change=_fmt_self_pay,
+        help="보조금을 받는 경우, 실제로 본인이 부담하는 금액을 만원 단위로 입력하세요. "
+             "예) 보조금 70% 지원 지역이라면 420 입력 (1,400만원의 30%). 지원이 없으면 1,400 그대로 두세요.",
     )
-    self_pay_won = int("".join(ch for ch in st.session_state["self_pay_input"] if ch.isdigit()) or 0)
-    self_pay_won = min(self_pay_won, CAPEX_TOTAL_MAN * 10000)
-    self_pay_man = self_pay_won / 10000   # 내부 계산은 만원 단위
+    self_pay_man = int("".join(ch for ch in st.session_state["self_pay_input"] if ch.isdigit()) or 0)
+    self_pay_man = min(self_pay_man, CAPEX_TOTAL_MAN)   # 내부 계산은 만원 단위
+    self_pay_won = self_pay_man * 10000                 # 로그 저장용 (원)
+
+    # ── 정부 보조금 안내 (기후에너지환경부 「2026년 난방 전기화 사업」) ──
+    st.markdown("""
+<div style='background:var(--bg-sage); border:1px solid var(--border-sage); border-radius:10px;
+            padding:14px 18px; margin-top:10px; font-size:0.88rem; color:#064e3b; line-height:1.65;'>
+  💡 <b>정부 보조금 안내</b> (기후에너지환경부 「2026년 난방 전기화 사업」)<br>
+  지원 대상 히트펌프(부속설비, 설치비 포함) 1대당 평균단가 <b>최대 1,400만원</b> 중
+  <b>국비(40%)와 지방비(30%)를 합한 70%를 지원</b>하며, 자부담은 30%(최대 420만원)입니다.
+  2026년에는 보급 초기 단계로 <b>제주·전남·경남 등 온난 지역</b>에서,
+  <b>태양광 발전시설(3kW 이상)을 설치했거나 설치 예정인 단독·연립주택</b>을 대상으로 지원합니다.
+  지자체별 물량·조건이 다르므로 거주 지역의 공고를 꼭 확인하세요.
+</div>
+""", unsafe_allow_html=True)
 
     st.markdown("---")
     st.markdown("**전기 요금제 선택**")
